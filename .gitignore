@@ -48,3 +48,4 @@ app.*.map.json
 # web related
 /madina-ecommerce
 madina-ecommerce
+.madina-ecommerce
