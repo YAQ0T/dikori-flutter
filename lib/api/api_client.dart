@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../config.dart';
 import '../data/home_content.dart';
 
 class ApiException implements Exception {
@@ -83,12 +84,7 @@ class ApiClient {
   }
 
   static String _normalizeBase(String? base) {
-    final raw =
-        base ??
-        const String.fromEnvironment(
-          'API_BASE',
-          defaultValue: 'http://localhost:3001/api',
-        );
+    final raw = base ?? kDefaultApiBase;
     return raw.isNotEmpty ? raw.replaceAll(RegExp(r'/+$'), '') : '';
   }
 
@@ -100,7 +96,11 @@ class ApiClient {
   }
 
   Map<String, String> _headers() {
-    final headers = <String, String>{'Content-Type': 'application/json'};
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+      // Bypass reCAPTCHA for native clients
+      'x-dikori-client': 'ios-app',
+    };
     if (_token != null && _token!.isNotEmpty) {
       headers['Authorization'] = 'Bearer $_token';
     }
@@ -288,15 +288,11 @@ class ApiClient {
   }
 
   Future<void> toggleFavorite(String productId) async {
-    try {
-      await _client.post(
-        _uri('$favoritesPath/toggle/$productId'),
-        headers: _headers(),
-      );
-    } on ApiException catch (e) {
-      if (e.status == 404) return;
-      rethrow;
-    }
+    final response = await _client.post(
+      _uri('$favoritesPath/toggle/$productId'),
+      headers: _headers(),
+    );
+    _decode(response);
   }
 
   Future<List<OrderSummary>> fetchOrders() async {
@@ -313,6 +309,56 @@ class ApiClient {
         .toList();
   }
 
+  Future<OrderSummary?> createOrder({
+    required List<CartItem> items,
+    required String customerName,
+    required String customerPhone,
+    required String address,
+    String? note,
+  }) async {
+    if (items.isEmpty) {
+      throw ApiException('لا توجد عناصر في السلة');
+    }
+
+    final payload = {
+      'customerName': customerName,
+      'customerPhone': customerPhone,
+      'address': address,
+      if (note != null && note.isNotEmpty) 'note': note,
+      'paymentMethod': 'cod',
+      'recaptchaAction': 'checkout',
+      'items': items
+          .map(
+            (item) => {
+              'productId': item.product.id,
+              if (item.product.variantId != null)
+                'variantId': item.product.variantId,
+              if (item.product.variantMeasure != null)
+                'measure': item.product.variantMeasure,
+              if (item.product.variantColor != null)
+                'color': item.product.variantColor,
+              if (item.product.variantSku != null) 'sku': item.product.variantSku,
+              'quantity': item.quantity,
+              'name': item.product.name,
+            },
+          )
+          .toList(),
+    };
+
+    final response = await _client.post(
+      _uri('/orders'),
+      headers: _headers(),
+      body: jsonEncode(payload),
+    );
+
+    final data = _decode(response);
+    final orderJson = data['order'] ?? data['data'] ?? data;
+    if (orderJson is Map<String, dynamic>) {
+      return OrderSummary.fromJson(orderJson);
+    }
+    return null;
+  }
+
   Future<List<VariantItem>> fetchVariants(String productId) async {
     final response = await _client.get(
       _uri('/variants', {'product': productId, 'limit': '200'}),
@@ -325,6 +371,35 @@ class ApiClient {
         .whereType<Map<String, dynamic>>()
         .map(VariantItem.fromJson)
         .toList();
+  }
+
+  Future<List<AppNotification>> fetchNotifications() async {
+    final response = await _client.get(
+      _uri('/notifications/my'),
+      headers: _headers(),
+    );
+    final data = _decode(response);
+    final list = data['notifications'] ?? data['data'] ?? data;
+    if (list is! List) return [];
+    return list
+        .whereType<Map<String, dynamic>>()
+        .map(AppNotification.fromJson)
+        .toList();
+  }
+
+  Future<AppNotification?> markNotificationRead(String id) async {
+    try {
+      final response = await _client.patch(
+        _uri('/notifications/$id/read'),
+        headers: _headers(),
+      );
+      final data = _decode(response);
+      if (data.isEmpty) return null;
+      return AppNotification.fromJson(data);
+    } on ApiException catch (e) {
+      if (e.status == 404) return null;
+      rethrow;
+    }
   }
 
   Map<String, dynamic> _decode(http.Response response) {

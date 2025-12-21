@@ -33,6 +33,11 @@ class ProductItem {
   final String image;
   final String? description;
   final String? variantLabel;
+  final String? variantId;
+  final String? variantMeasure;
+  final String? variantColor;
+  final String? variantSku;
+  final double? variantPrice;
   final String? mainCategory;
   final String? subCategory;
 
@@ -43,6 +48,11 @@ class ProductItem {
     required this.image,
     this.description,
     this.variantLabel,
+    this.variantId,
+    this.variantMeasure,
+    this.variantColor,
+    this.variantSku,
+    this.variantPrice,
     this.mainCategory,
     this.subCategory,
   });
@@ -74,6 +84,10 @@ class ProductItem {
     String? variantImage;
     String? variantLabel;
     double? variantPrice;
+    String? variantId;
+    String? variantMeasure;
+    String? variantColor;
+    String? variantSku;
 
     final vars = json['vars'];
     if (vars is List && vars.isNotEmpty) {
@@ -107,6 +121,15 @@ class ProductItem {
           colorName,
         ].where((v) => v != null && v.toString().isNotEmpty).toList();
         variantLabel = parts.isNotEmpty ? parts.join(' • ') : null;
+        variantId = firstVar['_id']?.toString();
+        variantMeasure = measure;
+        variantColor = colorName;
+        final stock = firstVar['stock'];
+        if (stock is Map && stock['sku'] != null) {
+          variantSku = stock['sku'].toString();
+        } else if (firstVar['sku'] != null) {
+          variantSku = firstVar['sku'].toString();
+        }
       }
     }
 
@@ -137,6 +160,11 @@ class ProductItem {
       image: image,
       description: description,
       variantLabel: variantLabel,
+      variantId: variantId,
+      variantMeasure: variantMeasure,
+      variantColor: variantColor,
+      variantSku: variantSku,
+      variantPrice: variantPrice,
       mainCategory: json['mainCategory']?.toString(),
       subCategory: json['subCategory']?.toString(),
     );
@@ -162,6 +190,7 @@ class VariantItem {
   final String colorSlug;
   final double price;
   final double? compareAt;
+  final String? sku;
   final List<String> images;
 
   const VariantItem({
@@ -172,6 +201,7 @@ class VariantItem {
     required this.colorSlug,
     required this.price,
     this.compareAt,
+    this.sku,
     this.images = const [],
   });
 
@@ -197,6 +227,14 @@ class VariantItem {
         ? (json['images'] as List).whereType<String>()
         : const Iterable<String>.empty();
 
+    String? sku;
+    final stock = json['stock'];
+    if (stock is Map && stock['sku'] != null) {
+      sku = stock['sku'].toString();
+    } else if (json['sku'] != null) {
+      sku = json['sku'].toString();
+    }
+
     return VariantItem(
       id: json['_id']?.toString() ?? json['id']?.toString() ?? '',
       measure: json['measure']?.toString() ?? '',
@@ -207,6 +245,7 @@ class VariantItem {
       colorSlug: json['colorSlug']?.toString() ?? colorName.toLowerCase(),
       price: amount,
       compareAt: compareAt,
+      sku: sku,
       images: [...colorImages, ...ownImages],
     );
   }
@@ -228,12 +267,74 @@ class CartItem {
   double get total => product.price * quantity;
 }
 
+class OrderLineItem {
+  final String name;
+  final int quantity;
+  final double price;
+  final String? color;
+  final String? measure;
+  final String? sku;
+
+  const OrderLineItem({
+    required this.name,
+    required this.quantity,
+    required this.price,
+    this.color,
+    this.measure,
+    this.sku,
+  });
+
+  double get total => price * quantity;
+
+  String? get variantLabel {
+    final parts = [measure, color]
+        .where((value) => value != null && value.toString().isNotEmpty)
+        .map((value) => value!)
+        .toList();
+    return parts.isEmpty ? null : parts.join(' • ');
+  }
+
+  factory OrderLineItem.fromJson(Map<String, dynamic> json) {
+    String pickName(dynamic value) {
+      if (value is String) return value;
+      if (value is Map) {
+        final ar = value['ar']?.toString();
+        final he = value['he']?.toString();
+        final en = value['en']?.toString();
+        return ar ?? he ?? en ?? value.values.first.toString();
+      }
+      return 'منتج';
+    }
+
+    final quantityRaw = json['quantity'] ?? json['qty'] ?? json['count'] ?? 0;
+    final quantity = quantityRaw is num
+        ? quantityRaw.toInt()
+        : int.tryParse(quantityRaw.toString()) ?? 0;
+    final priceRaw = json['price'] ?? json['unitPrice'] ?? 0;
+    final price = priceRaw is num
+        ? priceRaw.toDouble()
+        : double.tryParse(priceRaw.toString()) ?? 0;
+
+    return OrderLineItem(
+      name: pickName(
+        json['name'] ?? json['productName'] ?? json['title'] ?? json['product'],
+      ),
+      quantity: quantity,
+      price: price,
+      color: json['color']?.toString(),
+      measure: json['measure']?.toString(),
+      sku: json['sku']?.toString(),
+    );
+  }
+}
+
 class OrderSummary {
   final String id;
   final double total;
   final String status;
   final DateTime createdAt;
   final int itemsCount;
+  final List<OrderLineItem> items;
 
   const OrderSummary({
     required this.id,
@@ -241,24 +342,76 @@ class OrderSummary {
     required this.status,
     required this.createdAt,
     required this.itemsCount,
+    required this.items,
   });
 
   factory OrderSummary.fromJson(Map<String, dynamic> json) {
     final id = json['_id']?.toString() ?? json['id']?.toString() ?? '';
     final totalRaw = json['total'] ?? 0;
-    final double total = totalRaw is num ? totalRaw.toDouble() : 0;
+    final double total = totalRaw is num
+        ? totalRaw.toDouble()
+        : double.tryParse(totalRaw.toString()) ?? 0;
     final status = json['status']?.toString() ?? 'pending';
     final created =
         DateTime.tryParse(json['createdAt']?.toString() ?? '') ??
         DateTime.fromMillisecondsSinceEpoch(0);
-    final items = json['items'];
-    final itemsCount = items is List ? items.length : 0;
+    final rawItems = json['items'];
+    final items = rawItems is List
+        ? rawItems
+            .whereType<Map<String, dynamic>>()
+            .map(OrderLineItem.fromJson)
+            .toList()
+        : <OrderLineItem>[];
+    final itemsCount = items.isNotEmpty
+        ? items.length
+        : rawItems is List
+        ? rawItems.length
+        : 0;
     return OrderSummary(
       id: id,
       total: total,
       status: status,
       createdAt: created,
       itemsCount: itemsCount,
+      items: items,
+    );
+  }
+}
+
+class AppNotification {
+  final String id;
+  final String title;
+  final String message;
+  final DateTime? createdAt;
+  final bool isRead;
+
+  const AppNotification({
+    required this.id,
+    required this.title,
+    required this.message,
+    required this.createdAt,
+    this.isRead = false,
+  });
+
+  factory AppNotification.fromJson(Map<String, dynamic> json) {
+    final createdAtRaw = json['createdAt']?.toString();
+    return AppNotification(
+      id: json['_id']?.toString() ?? json['id']?.toString() ?? '',
+      title: json['title']?.toString() ?? '',
+      message: json['message']?.toString() ?? '',
+      createdAt:
+          createdAtRaw != null ? DateTime.tryParse(createdAtRaw) : null,
+      isRead: json['isRead'] == true,
+    );
+  }
+
+  AppNotification copyWith({bool? isRead}) {
+    return AppNotification(
+      id: id,
+      title: title,
+      message: message,
+      createdAt: createdAt,
+      isRead: isRead ?? this.isRead,
     );
   }
 }
@@ -333,6 +486,12 @@ const List<Category> categories = [
     label: 'لوازم أبواب',
     value: 'لوازم أبواب',
     image: 'https://i.imgur.com/UskLo6H.png',
+  ),
+    Category(
+    key: 'AlaminumeSupplies',
+    label: 'لوازم المنيوم',
+    value: 'لوازم المنيوم',
+    image: 'https://i.imgur.com/YbIfpWw.png',
   ),
 ];
 
