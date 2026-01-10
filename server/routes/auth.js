@@ -6,7 +6,6 @@ const crypto = require("crypto");
 const User = require("../models/User");
 const { getJwtSecret } = require("../utils/config");
 const { sendSMSHTD, normalizePhone } = require("../utils/smsHtd");
-const { createRateLimiter } = require("../utils/rateLimit");
 
 const router = express.Router();
 
@@ -27,64 +26,6 @@ const RESET_PASSWORD_THROTTLE_MESSAGE =
    ضبط بيئة/إعدادات
 ========================= */
 const JWT_SECRET = getJwtSecret();
-const limiterSignup = createRateLimiter({
-  windowMs: 10 * 60 * 1000,
-  max: 20,
-  message: "تجاوزت حد محاولات التسجيل، حاول لاحقًا.",
-  name: "auth-signup",
-});
-const limiterLogin = createRateLimiter({
-  windowMs: 10 * 60 * 1000,
-  max: 40,
-  message: "محاولات تسجيل دخول كثيرة. حاول بعد قليل.",
-  name: "auth-login",
-});
-const limiterSendSms = createRateLimiter({
-  windowMs: 10 * 60 * 1000,
-  max: 5,
-  message: "تجاوزت حد إرسال أكواد التحقق. حاول لاحقًا.",
-  name: "auth-send-sms",
-  keyGenerator: (req) => {
-    const ip = req.ip || req.headers["x-forwarded-for"] || "ip";
-    const normPhone = req.body?.phone ? normalizePhone(req.body.phone) : null;
-    const userId = req.body?.userId ? String(req.body.userId) : "";
-    return `${ip}:${normPhone || userId || "unknown"}`;
-  },
-});
-const limiterPasswordRequest = createRateLimiter({
-  windowMs: 15 * 60 * 1000,
-  max: 8,
-  message: "طلبات الاستعادة كثيرة. حاول لاحقًا.",
-  name: "auth-password-request",
-  keyGenerator: (req) => {
-    const ip = req.ip || req.headers["x-forwarded-for"] || "ip";
-    const normPhone = req.body?.phone ? normalizePhone(req.body.phone) : null;
-    const normEmail = req.body?.email
-      ? String(req.body.email).trim().toLowerCase()
-      : "";
-    return `${ip}:${normPhone || normEmail || "unknown"}`;
-  },
-});
-const limiterPasswordReset = createRateLimiter({
-  windowMs: 15 * 60 * 1000,
-  max: 8,
-  message: "محاولات إعادة التعيين كثيرة. حاول لاحقًا.",
-  name: "auth-password-reset",
-  keyGenerator: (req) => {
-    const ip = req.ip || req.headers["x-forwarded-for"] || "ip";
-    const normPhone = req.body?.phone ? normalizePhone(req.body.phone) : null;
-    const normEmail = req.body?.email
-      ? String(req.body.email).trim().toLowerCase()
-      : "";
-    return `${ip}:${normPhone || normEmail || "unknown"}`;
-  },
-});
-const limiterVerifySms = createRateLimiter({
-  windowMs: 10 * 60 * 1000,
-  max: 10,
-  message: "محاولات التحقق كثيرة. حاول لاحقًا.",
-  name: "auth-verify-sms",
-});
 
 function normalizeEmail(email) {
   if (!email) return null;
@@ -130,7 +71,7 @@ async function setPhoneOTPOnUser(user, code) {
 /* =========================
    إنشاء حساب
 ========================= */
-router.post("/signup", limiterSignup, async (req, res) => {
+router.post("/signup", async (req, res) => {
   try {
     const { name, phone, email, password } = req.body || {};
 
@@ -206,7 +147,7 @@ router.post("/signup", limiterSignup, async (req, res) => {
 /* =========================
    إرسال كود SMS (اختياري)
 ========================= */
-router.post("/send-sms-code", limiterSendSms, async (req, res) => {
+router.post("/send-sms-code", async (req, res) => {
   try {
     const { userId, phone } = req.body || {};
 
@@ -246,7 +187,7 @@ router.post("/send-sms-code", limiterSendSms, async (req, res) => {
 /* =========================
    توثيق رمز الـ SMS
 ========================= */
-router.post("/verify-sms", limiterVerifySms, async (req, res) => {
+router.post("/verify-sms", async (req, res) => {
   try {
     const { userId, code } = req.body || {};
     if (!userId || !code)
@@ -302,7 +243,7 @@ router.post("/verify-sms", limiterVerifySms, async (req, res) => {
 /* =========================
    تسجيل الدخول
 ========================= */
-router.post("/login", limiterLogin, async (req, res) => {
+router.post("/login", async (req, res) => {
   try {
     const { phone, email, password } = req.body || {};
     if ((!phone && !email) || !password) {
@@ -369,7 +310,7 @@ router.post("/login", limiterLogin, async (req, res) => {
 /* =========================
    نسيت كلمة المرور — طلب كود
 ========================= */
-router.post("/password/request-reset", limiterPasswordRequest, async (req, res) => {
+router.post("/password/request-reset", async (req, res) => {
   try {
     const { phone, email } = req.body || {};
     if (!phone && !email) {
@@ -412,19 +353,16 @@ router.post("/password/request-reset", limiterPasswordRequest, async (req, res) 
 /* =========================
    استكمال إعادة التعيين
 ========================= */
-router.post("/password/reset", limiterPasswordReset, async (req, res) => {
+router.post("/password/reset", async (req, res) => {
   try {
-    const { token, password, email, phone } = req.body || {};
-    if (!token || !password || (!email && !phone)) {
+    const { token, password, email } = req.body || {};
+    if (!token || !password) {
       return res.status(400).json({ message: "بيانات ناقصة" });
     }
 
-    const normalizedEmail = normalizeEmail(email);
-    const normalizedPhone = phone ? normalizePhone(phone) : null;
-
-    const user = normalizedEmail
-      ? await User.findOne({ email: normalizedEmail })
-      : await User.findOne({ phone: normalizedPhone });
+    const user = email
+      ? await User.findOne({ email: String(email).toLowerCase() })
+      : await User.findOne({ resetPasswordCodeHash: { $exists: true } });
 
     if (!user) {
       return res.status(400).json({ message: "رمز غير صحيح أو منتهي" });

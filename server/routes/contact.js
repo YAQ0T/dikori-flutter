@@ -2,20 +2,12 @@ const express = require("express");
 const router = express.Router();
 const nodemailer = require("nodemailer");
 const axios = require("axios");
-const { createRateLimiter } = require("../utils/rateLimit");
-
-const contactLimiter = createRateLimiter({
-  windowMs: 10 * 60 * 1000,
-  max: 5,
-  message: "تم تجاوز حد مراسلات الدعم. حاول بعد قليل.",
-  name: "contact",
-});
 
 /**
  * POST /api/contact
  * Body: { name, email, message, recaptchaToken? }
  */
-router.post("/", contactLimiter, async (req, res) => {
+router.post("/", async (req, res) => {
   const { name, email, message, recaptchaToken } = req.body || {};
 
   if (!name || !email || !message) {

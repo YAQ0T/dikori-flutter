@@ -3,7 +3,6 @@ const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
 const axios = require("axios");
-const nodemailer = require("nodemailer");
 
 const {
   verifyToken,
@@ -23,7 +22,6 @@ const {
   mapLocalizedForResponse,
 } = require("../utils/localized");
 const { queueOrderSummarySMS } = require("../utils/orderSms");
-const { issuePaymentToken } = require("../utils/paymentTokens");
 const DEFAULT_RECAPTCHA_ACTION = "checkout";
 const ENV_MIN_SCORE = Number(process.env.RECAPTCHA_MIN_SCORE);
 const DEFAULT_RECAPTCHA_MIN_SCORE = Number.isFinite(ENV_MIN_SCORE)
@@ -146,15 +144,6 @@ const toDisplayName = (raw) => {
   return normalized.ar || normalized.he || "منتج";
 };
 
-function isOutOfStock(variantDoc) {
-  const qty = Number(
-    variantDoc?.stock && typeof variantDoc.stock.inStock !== "undefined"
-      ? variantDoc.stock.inStock
-      : 0
-  );
-  return !Number.isFinite(qty) || qty <= 0;
-}
-
 const resolveItemName = ({
   requestedName,
   productDoc,
@@ -255,137 +244,6 @@ async function findBestDiscountRule(subtotal) {
     .lean();
 
   return rule || null;
-}
-
-/* =============== Email helpers =============== */
-let cachedMailTransport = null;
-function createOrderMailTransport() {
-  if (cachedMailTransport) return cachedMailTransport;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  if (!user || !pass) {
-    throw new Error(
-      "SMTP_USER/SMTP_PASS غير مهيأة في الخادم، تعذّر إرسال بريد الطلبات"
-    );
-  }
-  cachedMailTransport = nodemailer.createTransport({
-    host: process.env.SMTP_HOST || "smtp.gmail.com",
-    port: Number(process.env.SMTP_PORT || 587),
-    secure: String(process.env.SMTP_SECURE || "").toLowerCase() === "true",
-    auth: { user, pass },
-  });
-  return cachedMailTransport;
-}
-
-function escapeHtml(value = "") {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function localizedToString(raw) {
-  if (!raw) return "";
-  if (typeof raw === "string") return raw;
-  if (typeof raw === "object") {
-    return raw.ar || raw.he || Object.values(raw).find(Boolean) || "";
-  }
-  return "";
-}
-
-function buildOrderEmailHtml(order = {}) {
-  const currency = order.paymentCurrency || order.currency || "ILS";
-  const fmt = (num) => `${Number(num || 0).toFixed(2)} ${currency}`;
-  const customerName =
-    order?.user?.name ||
-    order?.guestInfo?.name ||
-    (order?.isGuest ? "ضيف" : "مستخدم");
-  const customerPhone = order?.user?.phone || order?.guestInfo?.phone || "";
-  const customerEmail = order?.user?.email || order?.guestInfo?.email || "";
-  const address = order?.address || order?.guestInfo?.address || "";
-  const items = Array.isArray(order?.items) ? order.items : [];
-
-  const rows = items
-    .map((it, idx) => {
-      const name = escapeHtml(localizedToString(it?.name) || "منتج");
-      const color = escapeHtml(it?.color || "");
-      const measure = escapeHtml(it?.measure || "");
-      const sku = escapeHtml(it?.sku || "");
-      const qty = Number(it?.quantity || 0);
-      const unit = fmt(it?.price || 0);
-      const total = fmt((it?.price || 0) * qty);
-      return `<tr>
-        <td>${idx + 1}</td>
-        <td>${name}</td>
-        <td>${color || "-"}</td>
-        <td>${measure || "-"}</td>
-        <td>${sku || "-"}</td>
-        <td>${qty}</td>
-        <td>${unit}</td>
-        <td>${total}</td>
-      </tr>`;
-    })
-    .join("\n");
-
-  const discountAmount = order?.discount?.amount || 0;
-  const createdAt = order?.createdAt
-    ? new Date(order.createdAt).toLocaleString("en-GB", { hour12: false })
-    : "";
-
-  return `
-    <h2>طلب جديد من المتجر</h2>
-    <p>رقم الطلب: <strong>${escapeHtml(order?._id || "")}</strong></p>
-    <p>الإنشاء: ${escapeHtml(createdAt)}</p>
-    <p>طريقة الدفع: ${escapeHtml(order?.paymentMethod || "cod")}</p>
-    <p>حالة الدفع: ${escapeHtml(order?.paymentStatus || "unpaid")}</p>
-    <p>الاسم: ${escapeHtml(customerName)}</p>
-    <p>الجوال: ${escapeHtml(customerPhone)}</p>
-    <p>البريد: ${escapeHtml(customerEmail)}</p>
-    <p>العنوان: ${escapeHtml(address)}</p>
-    <p>ملاحظات: ${escapeHtml(order?.notes || "لا توجد")}</p>
-    <h3>العناصر</h3>
-    <table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;">
-      <thead>
-        <tr>
-          <th>#</th><th>المنتج</th><th>اللون</th><th>المقاس</th><th>SKU</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${rows}
-      </tbody>
-    </table>
-    <h3>الإجماليات</h3>
-    <p>المجموع قبل الخصم: ${fmt(order?.subtotal || 0)}</p>
-    <p>الخصم: ${fmt(discountAmount)}</p>
-    <p><strong>الإجمالي المطلوب: ${fmt(order?.total || 0)}</strong></p>
-  `;
-}
-
-async function sendNewOrderEmail(orderDoc) {
-  const order =
-    typeof orderDoc?.toObject === "function" ? orderDoc.toObject() : orderDoc;
-
-  const to = process.env.ORDERS_EMAIL_TO || "ama.co.12.2025@gmail.com";
-  const from =
-    process.env.ORDERS_EMAIL_FROM ||
-    process.env.CONTACT_FROM ||
-    process.env.SMTP_USER ||
-    "no-reply@dikori.app";
-  const subject = `طلب جديد #${order?._id || ""}`.trim();
-  const html = buildOrderEmailHtml(order);
-
-  const transport = createOrderMailTransport();
-  await transport.sendMail({
-    from: `"Dikori Orders" <${from}>`,
-    to,
-    subject,
-    html,
-    text: `طلب جديد من ${localizedToString(order?.user?.name) ||
-      localizedToString(order?.guestInfo?.name) ||
-      "عميل"}\nالإجمالي: ${order?.total}\nالمرجع: ${order?.reference || "—"}`,
-  });
 }
 
 async function findEligibleRuleById(ruleId, subtotal) {
@@ -523,14 +381,6 @@ router.post("/", verifyTokenOptional, async (req, res) => {
         });
       }
 
-      if (isOutOfStock(variant)) {
-        return res.status(409).json({
-          message: `المتغيّر غير متوفر حاليًا لعنصر: ${toDisplayName(
-            it?.name
-          )}`,
-        });
-      }
-
       const price = computeFinalAmount(variant.price || { amount: 0 });
 
       let productDoc = productCache.get(String(pid));
@@ -616,12 +466,6 @@ router.post("/", verifyTokenOptional, async (req, res) => {
       cardType: "الدفع عند الاستلام",
     });
 
-    try {
-      await sendNewOrderEmail(doc);
-    } catch (err) {
-      console.error("فشل إرسال بريد إشعار الطلب:", err?.message || err);
-    }
-
     return res.status(201).json(doc);
   } catch (err) {
     console.error("POST /api/orders error:", err);
@@ -702,14 +546,6 @@ router.post("/prepare-card", verifyTokenOptional, async (req, res) => {
           });
       }
 
-      if (isOutOfStock(variant)) {
-        return res.status(409).json({
-          message: `المتغيّر غير متوفر حاليًا لعنصر: ${toDisplayName(
-            it?.name
-          )}`,
-        });
-      }
-
       const price = computeFinalAmount(variant.price || { amount: 0 });
 
       let productDoc = productCache.get(String(pid));
@@ -783,17 +619,7 @@ router.post("/prepare-card", verifyTokenOptional, async (req, res) => {
       notes: isNonEmpty(notes) ? String(notes).trim() : "",
     });
 
-    const paymentToken = issuePaymentToken(doc._id);
-
-    try {
-      await sendNewOrderEmail(doc);
-    } catch (err) {
-      console.error("فشل إرسال بريد إشعار الطلب:", err?.message || err);
-    }
-
-    return res
-      .status(201)
-      .json({ _id: doc._id, total: doc.total, paymentToken });
+    return res.status(201).json({ _id: doc._id, total: doc.total });
   } catch (err) {
     console.error("POST /api/orders/prepare-card error:", err);
     return res.status(500).json({ message: "فشل تحضير طلب البطاقة" });
@@ -947,6 +773,15 @@ router.patch(
         const existing = await Order.findOne({ _id: order._id }).lean();
         return res.json({ message: "الطلب مدفوع مسبقًا", order: existing });
       }
+
+      await Promise.all(
+        (updated.items || []).map((ci) =>
+          Variant.updateOne(
+            { _id: ci.variantId, "stock.inStock": { $gte: ci.quantity } },
+            { $inc: { "stock.inStock": -ci.quantity } }
+          )
+        )
+      );
 
       queueOrderSummarySMS({
         order: updated,

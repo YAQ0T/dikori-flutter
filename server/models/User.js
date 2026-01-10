@@ -30,11 +30,6 @@ const UserSchema = new mongoose.Schema(
       lat: Number,
       lng: Number,
     },
-    favorites: {
-      type: [mongoose.Schema.Types.ObjectId],
-      ref: "Product",
-      default: [],
-    },
 
     // ✅ توثيق الجوال بالـ OTP (حاليًا مستخدم للتوثيق العام)
     phoneVerified: { type: Boolean, default: false },

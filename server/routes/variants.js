@@ -16,9 +16,6 @@ const {
 function slugify(s) {
   return (s || "").toString().trim().toLowerCase().replace(/\s+/g, "-");
 }
-function escapeRegex(term = "") {
-  return String(term).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 function isDiscountActive(discount = {}) {
   if (!discount || !discount.value) return false;
   const now = new Date();
@@ -71,19 +68,14 @@ router.get("/", verifyTokenOptional, async (req, res) => {
     }
 
     if (q && String(q).trim()) {
-      const term = String(q).trim().slice(0, 64);
-      const safe = escapeRegex(term);
-      const regex = safe ? new RegExp(safe, "i") : null;
-      if (!regex) {
-        return res.status(400).json({ message: "استعلام البحث غير صالح" });
-      }
+      const term = String(q).trim();
       andFilters.push({
         $or: [
-          { measure: regex },
-          { "color.name": regex },
-          { "color.code": regex },
-          { "stock.sku": regex },
-          { tags: regex },
+          { measure: new RegExp(term, "i") },
+          { "color.name": new RegExp(term, "i") },
+          { "color.code": new RegExp(term, "i") },
+          { "stock.sku": new RegExp(term, "i") },
+          { tags: new RegExp(term, "i") },
         ],
       });
     }

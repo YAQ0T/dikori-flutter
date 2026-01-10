@@ -48,7 +48,6 @@ const corsBaseOptions = {
     "Authorization",
     "x-forwarded-for",
     "x-lahza-signature",
-    "x-dikori-client",
   ],
 };
 
@@ -68,6 +67,20 @@ app.use(
 
 /* ---------- Trust Proxy (قبل استخدام IP) ---------- */
 app.set("trust proxy", 1);
+
+/* ---------- Request Logger ---------- */
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on("finish", () => {
+    const duration = Date.now() - start;
+    console.log(
+      `[${new Date().toISOString()}] ${req.method} ${req.originalUrl} -> ${
+        res.statusCode
+      } (${duration}ms)`
+    );
+  });
+  next();
+});
 
 /* =====================================================
  *  WEBHOOK: Lahza  (ضروري يكون قبل express.json)
@@ -122,8 +135,6 @@ const {
   verifyLahzaTransaction,
 } = require("./utils/lahza");
 const { queueOrderSummarySMS } = require("./utils/orderSms");
-const DECREMENT_STOCK_ON_PAYMENT =
-  String(process.env.DECREMENT_STOCK_ON_PAYMENT || "0") === "1";
 
 function getClientIp(req) {
   const xff = req.headers["x-forwarded-for"];
@@ -141,7 +152,6 @@ function getClientIp(req) {
 }
 
 async function decrementStockByOrderItems(items = []) {
-  if (!DECREMENT_STOCK_ON_PAYMENT) return;
   await Promise.all(
     (items || []).map((ci) =>
       Variant.updateOne(
@@ -350,7 +360,6 @@ app.use("/api/contact", require("./routes/contact"));
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/variants", require("./routes/variants"));
 app.use("/api/products", require("./routes/products"));
-app.use("/api/favorites", require("./routes/favorites"));
 app.use("/api/orders", require("./routes/orders"));
 app.use("/api/users", require("./routes/user"));
 app.use("/api/notifications", require("./routes/notifications"));
@@ -363,15 +372,6 @@ app.use("/api/orders", require("./routes/order-status"));
 
 /* ---------- health ---------- */
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
-
-/* ---------- Error handler ---------- */
-app.use((err, _req, res, next) => {
-  console.error("Unhandled error:", err);
-  if (res.headersSent) {
-    return next(err);
-  }
-  return res.status(500).json({ message: "خطأ غير متوقع في الخادم" });
-});
 
 /* ---------- boot ---------- */
 let server = null;
