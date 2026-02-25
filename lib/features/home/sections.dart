@@ -7,12 +7,23 @@ class _HomeContent extends StatelessWidget {
     required this.onToggleFavorite,
     required this.isFavorite,
     required this.products,
+    required this.recommendedProducts,
+    required this.newArrivalProducts,
     required this.isLoading,
     required this.errorText,
     required this.onBrowseAll,
     required this.categories,
     required this.onCategorySelected,
     required this.onStartShopping,
+    required this.onExploreCategories,
+    required this.heroKicker,
+    required this.heroTitle,
+    required this.heroSubtitle,
+    required this.heroPrimaryCtaLabel,
+    required this.heroSecondaryCtaLabel,
+    required this.heroCalloutLabel,
+    required this.heroCalloutValue,
+    required this.heroImageUrl,
     required this.fetchVariants,
   });
 
@@ -21,26 +32,53 @@ class _HomeContent extends StatelessWidget {
   final void Function(ProductItem product) onToggleFavorite;
   final bool Function(ProductItem product) isFavorite;
   final List<ProductItem> products;
+  final List<ProductItem> recommendedProducts;
+  final List<ProductItem> newArrivalProducts;
   final bool isLoading;
   final String? errorText;
   final VoidCallback onBrowseAll;
   final List<CategoryNode> categories;
   final void Function(CategoryNode node) onCategorySelected;
   final VoidCallback onStartShopping;
+  final VoidCallback onExploreCategories;
+  final String heroKicker;
+  final String heroTitle;
+  final String heroSubtitle;
+  final String heroPrimaryCtaLabel;
+  final String heroSecondaryCtaLabel;
+  final String heroCalloutLabel;
+  final String heroCalloutValue;
+  final String heroImageUrl;
   final Future<List<VariantItem>> Function(String productId) fetchVariants;
 
   @override
   Widget build(BuildContext context) {
-    final primaryList = products.isNotEmpty ? products : suggestedProducts;
-    final secondaryList = products.length > 8
-        ? products.sublist(0, 8)
-        : newArrivals;
+    final fallbackProducts = products.isNotEmpty ? products : suggestedProducts;
+    final primaryList = recommendedProducts.isNotEmpty
+        ? recommendedProducts
+        : fallbackProducts;
+    final secondaryList = newArrivalProducts.isNotEmpty
+        ? newArrivalProducts
+        : (products.length > 8 ? products.sublist(0, 8) : newArrivals);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _HeroSection(onStartShopping: onStartShopping),
-        const SizedBox(height: 16),
+        _HeroSection(
+          onStartShopping: onStartShopping,
+          onExploreCategories: onExploreCategories,
+          kicker: heroKicker,
+          title: heroTitle,
+          subtitle: heroSubtitle,
+          primaryCtaLabel: heroPrimaryCtaLabel,
+          secondaryCtaLabel: heroSecondaryCtaLabel,
+          calloutLabel: heroCalloutLabel,
+          calloutValue: heroCalloutValue,
+          imageUrl: heroImageUrl,
+        ),
+        const SizedBox(height: 18),
+        const _TrustBadgesSection(),
+        const SizedBox(height: 18),
         _CategoriesSection(
           categories: categories,
           onSelect: onCategorySelected,
@@ -63,7 +101,7 @@ class _HomeContent extends StatelessWidget {
         const SizedBox(height: 24),
         _ProductsSection(
           title: 'وصل حديثًا',
-          products: secondaryList,
+          products: secondaryList.take(8).toList(),
           onViewProduct: onViewProduct,
           onAddToCart: onAddToCart,
           fetchVariants: fetchVariants,
@@ -73,7 +111,11 @@ class _HomeContent extends StatelessWidget {
           errorText: errorText,
           onBrowseAll: onBrowseAll,
         ),
-        const SizedBox(height: 32),
+        const SizedBox(height: 26),
+        const _TestimonialsSection(),
+        const SizedBox(height: 22),
+        const _PaymentSection(),
+        const SizedBox(height: 26),
         const _Footer(),
       ],
     );
@@ -81,41 +123,289 @@ class _HomeContent extends StatelessWidget {
 }
 
 class _HeroSection extends StatelessWidget {
-  const _HeroSection({required this.onStartShopping});
+  const _HeroSection({
+    required this.onStartShopping,
+    required this.onExploreCategories,
+    required this.kicker,
+    required this.title,
+    required this.subtitle,
+    required this.primaryCtaLabel,
+    required this.secondaryCtaLabel,
+    required this.calloutLabel,
+    required this.calloutValue,
+    required this.imageUrl,
+  });
 
   final VoidCallback onStartShopping;
+  final VoidCallback onExploreCategories;
+  final String kicker;
+  final String title;
+  final String subtitle;
+  final String primaryCtaLabel;
+  final String secondaryCtaLabel;
+  final String calloutLabel;
+  final String calloutValue;
+  final String imageUrl;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Text(
-          heroTitle,
-          textAlign: TextAlign.right,
-          style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-            fontWeight: FontWeight.w800,
-            fontSize: 32,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth >= 920;
+
+        final textPanel = Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            if (kicker.trim().isNotEmpty) ...[
+              Text(
+                kicker,
+                textAlign: TextAlign.right,
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: _appMuted(context),
+                  letterSpacing: 1.2,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
+            Text(
+              title,
+              textAlign: TextAlign.right,
+              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                fontWeight: FontWeight.w800,
+                fontSize: isWide ? 38 : 32,
+                height: 1.2,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              subtitle,
+              textAlign: TextAlign.right,
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                color: _appMuted(context),
+                height: 1.6,
+              ),
+            ),
+            const SizedBox(height: 18),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                ElevatedButton(
+                  onPressed: onStartShopping,
+                  child: Text(primaryCtaLabel),
+                ),
+                OutlinedButton(
+                  onPressed: onExploreCategories,
+                  child: Text(secondaryCtaLabel),
+                ),
+              ],
+            ),
+          ],
+        );
+
+        final imagePanel = Stack(
+          clipBehavior: Clip.none,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(28),
+              child: AspectRatio(
+                aspectRatio: 4 / 5,
+                child: Image.network(
+                  imageUrl,
+                  fit: BoxFit.cover,
+                  loadingBuilder: (context, child, loadingProgress) {
+                    if (loadingProgress == null) return child;
+                    return Container(color: _appSoftSurface(context));
+                  },
+                  errorBuilder: (context, error, stackTrace) => Container(
+                    color: _appSoftSurface(context),
+                    child: const Icon(Icons.image_not_supported_outlined, size: 42),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: -16,
+              right: 16,
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 220),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surface.withValues(
+                    alpha: 0.95,
+                  ),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: _appBorder(context)),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x22000000),
+                      blurRadius: 14,
+                      offset: Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      calloutLabel,
+                      textAlign: TextAlign.right,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: _appMuted(context),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      calloutValue,
+                      textAlign: TextAlign.right,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+
+        final content = isWide
+            ? Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(flex: 10, child: textPanel),
+                  const SizedBox(width: 24),
+                  Expanded(flex: 8, child: imagePanel),
+                ],
+              )
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  imagePanel,
+                  const SizedBox(height: 28),
+                  textPanel,
+                ],
+              );
+
+        return DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(26),
+            gradient: const LinearGradient(
+              begin: Alignment.topRight,
+              end: Alignment.bottomLeft,
+              colors: [Color(0xFFEFF3F6), Color(0xFFFFFFFF)],
+            ),
+            border: Border.all(color: _appBorder(context)),
           ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          heroSubtitle,
-          textAlign: TextAlign.right,
-          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-            color: Colors.grey.shade700,
-            height: 1.5,
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(18, 18, 18, isWide ? 24 : 20),
+            child: content,
           ),
-        ),
-        const SizedBox(height: 14),
-        Align(
-          alignment: Alignment.centerRight,
-          child: ElevatedButton(
-            onPressed: onStartShopping,
-            child: const Text('ابدأ التسوّق الآن'),
+        );
+      },
+    );
+  }
+}
+
+class _TrustBadgesSection extends StatelessWidget {
+  const _TrustBadgesSection();
+
+  IconData _iconForKey(String key) {
+    switch (key) {
+      case 'delivery':
+        return Icons.local_shipping_outlined;
+      case 'support':
+        return Icons.headset_mic_outlined;
+      case 'secure':
+        return Icons.shield_outlined;
+      case 'returns':
+        return Icons.autorenew_rounded;
+      case 'quality':
+        return Icons.workspace_premium_outlined;
+      default:
+        return Icons.verified_outlined;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final crossAxisCount = width >= 1020
+            ? 4
+            : width >= 740
+            ? 2
+            : 1;
+        return GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: crossAxisCount,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            mainAxisExtent: 102,
           ),
-        ),
-      ],
+          itemCount: trustBadges.length,
+          itemBuilder: (context, index) {
+            final badge = trustBadges[index];
+            return Container(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surface,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: _appBorder(context)),
+              ),
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Container(
+                    height: 38,
+                    width: 38,
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primary.withValues(
+                        alpha: 0.08,
+                      ),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(
+                      _iconForKey(badge.key),
+                      size: 20,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          badge.title,
+                          textAlign: TextAlign.right,
+                          style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          badge.description,
+                          textAlign: TextAlign.right,
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: _appMuted(context),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }
@@ -201,8 +491,8 @@ class _CategoryCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(14),
                 child: Container(
                   decoration: BoxDecoration(
-                    color: Colors.white,
-                    border: Border.all(color: Colors.grey.shade200),
+                    color: Theme.of(context).colorScheme.surface,
+                    border: Border.all(color: _appBorder(context)),
                     borderRadius: BorderRadius.circular(14),
                     boxShadow: const [
                       BoxShadow(
@@ -232,11 +522,11 @@ class _CategoryCard extends StatelessWidget {
                           gaplessPlayback: true,
                           loadingBuilder: (context, child, loadingProgress) {
                             if (loadingProgress == null) return child;
-                            return Container(color: Colors.grey.shade100);
+                            return Container(color: _appSoftSurface(context));
                           },
                           errorBuilder: (context, error, stackTrace) =>
                               Container(
-                                color: Colors.grey.shade100,
+                                color: _appSoftSurface(context),
                                 child: const Icon(
                                   Icons.image_not_supported_outlined,
                                 ),
@@ -250,7 +540,7 @@ class _CategoryCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              category.main,
+              category.displayMain,
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 fontWeight: FontWeight.w600,
@@ -339,11 +629,14 @@ class _BenefitCard extends StatelessWidget {
                 height: 44,
                 width: 44,
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
+                  color: _appSoftSurface(context),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Center(
-                  child: Icon(_iconForBenefit(), color: Colors.black),
+                  child: Icon(
+                    _iconForBenefit(),
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
                 ),
               ),
             ),
@@ -361,10 +654,206 @@ class _BenefitCard extends StatelessWidget {
               benefit.description,
               style: Theme.of(
                 context,
-              ).textTheme.bodyMedium?.copyWith(color: Colors.grey.shade700),
+              ).textTheme.bodyMedium?.copyWith(color: _appMuted(context)),
               textAlign: TextAlign.right,
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TestimonialsSection extends StatelessWidget {
+  const _TestimonialsSection();
+
+  @override
+  Widget build(BuildContext context) {
+    if (testimonials.isEmpty) return const SizedBox.shrink();
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final crossAxisCount = width >= 1000
+            ? 3
+            : width >= 680
+            ? 2
+            : 1;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _SectionHeader(title: 'آراء العملاء'),
+            const SizedBox(height: 12),
+            GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: crossAxisCount,
+                crossAxisSpacing: 12,
+                mainAxisSpacing: 12,
+                mainAxisExtent: 224,
+              ),
+              itemCount: testimonials.length,
+              itemBuilder: (context, index) {
+                final item = testimonials[index];
+                return Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: List.generate(
+                            item.rating,
+                            (_) => const Padding(
+                              padding: EdgeInsets.only(left: 2),
+                              child: Icon(
+                                Icons.star_rounded,
+                                size: 18,
+                                color: Color(0xFFF59E0B),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Expanded(
+                          child: Text(
+                            '“${item.quote}”',
+                            textAlign: TextAlign.right,
+                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: _appMuted(context),
+                              height: 1.5,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text(
+                                  item.name,
+                                  textAlign: TextAlign.right,
+                                  style: Theme.of(context).textTheme.titleSmall
+                                      ?.copyWith(fontWeight: FontWeight.w700),
+                                ),
+                                Text(
+                                  item.role,
+                                  textAlign: TextAlign.right,
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(color: _appMuted(context)),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(width: 10),
+                            CircleAvatar(
+                              radius: 20,
+                              backgroundColor: _appSoftSurface(context),
+                              backgroundImage:
+                                  item.imageUrl.isNotEmpty ? NetworkImage(item.imageUrl) : null,
+                              child: item.imageUrl.isEmpty
+                                  ? const Icon(Icons.person_outline)
+                                  : null,
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _PaymentSection extends StatelessWidget {
+  const _PaymentSection();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final isWide = constraints.maxWidth >= 720;
+            final logos = const [
+              _PaymentLogoChip(label: 'VISA'),
+              _PaymentLogoChip(label: 'Mastercard'),
+            ];
+            final details = Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  'طرق دفع موثوقة',
+                  textAlign: TextAlign.right,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'دفع آمن ومعالجة فورية عبر مزودي الدفع المعتمدين.',
+                  textAlign: TextAlign.right,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: _appMuted(context),
+                  ),
+                ),
+              ],
+            );
+            if (isWide) {
+              return Row(
+                children: [
+                  Wrap(spacing: 10, runSpacing: 10, children: logos),
+                  const Spacer(),
+                  details,
+                ],
+              );
+            }
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                details,
+                const SizedBox(height: 12),
+                Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: logos,
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _PaymentLogoChip extends StatelessWidget {
+  const _PaymentLogoChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: _appSoftSurface(context),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _appBorder(context)),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+          fontWeight: FontWeight.w700,
         ),
       ),
     );
@@ -510,7 +999,7 @@ class _ProductsSection extends StatelessWidget {
                           ? '${price.toStringAsFixed(2)} ₪'
                           : 'السعر عند الاختيار',
                       style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
-                        color: Colors.grey.shade700,
+                        color: _appMuted(ctx),
                       ),
                       textAlign: TextAlign.right,
                     ),
@@ -523,7 +1012,7 @@ class _ProductsSection extends StatelessWidget {
                         children: [
                           Text(
                             error!,
-                            style: TextStyle(color: Colors.red.shade700),
+                            style: TextStyle(color: _appError(ctx)),
                             textAlign: TextAlign.right,
                           ),
                           const SizedBox(height: 8),

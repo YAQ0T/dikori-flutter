@@ -1,5 +1,85 @@
 part of '../../main.dart';
 
+enum _ProductSortOption { defaultOrder, priceAsc, priceDesc, nameAsc, nameDesc }
+
+extension _ProductSortOptionLabel on _ProductSortOption {
+  String get label {
+    switch (this) {
+      case _ProductSortOption.defaultOrder:
+        return 'الترتيب الافتراضي';
+      case _ProductSortOption.priceAsc:
+        return 'السعر: من الأقل إلى الأعلى';
+      case _ProductSortOption.priceDesc:
+        return 'السعر: من الأعلى إلى الأقل';
+      case _ProductSortOption.nameAsc:
+        return 'الاسم: أ -> ي';
+      case _ProductSortOption.nameDesc:
+        return 'الاسم: ي -> أ';
+    }
+  }
+}
+
+List<ProductItem> _sortProducts(
+  List<ProductItem> items,
+  _ProductSortOption option,
+) {
+  final sorted = List<ProductItem>.from(items);
+  switch (option) {
+    case _ProductSortOption.defaultOrder:
+      break;
+    case _ProductSortOption.priceAsc:
+      sorted.sort((a, b) => a.price.compareTo(b.price));
+      break;
+    case _ProductSortOption.priceDesc:
+      sorted.sort((a, b) => b.price.compareTo(a.price));
+      break;
+    case _ProductSortOption.nameAsc:
+      sorted.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      break;
+    case _ProductSortOption.nameDesc:
+      sorted.sort((a, b) => b.name.toLowerCase().compareTo(a.name.toLowerCase()));
+      break;
+  }
+  return sorted;
+}
+
+class _ProductSortField extends StatelessWidget {
+  const _ProductSortField({required this.value, required this.onChanged});
+
+  final _ProductSortOption value;
+  final ValueChanged<_ProductSortOption> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: DropdownButtonFormField<_ProductSortOption>(
+        value: value,
+        onChanged: (value) {
+          if (value == null) return;
+          onChanged(value);
+        },
+        decoration: InputDecoration(
+          labelText: 'الترتيب',
+          filled: true,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+        items: _ProductSortOption.values
+            .map(
+              (option) => DropdownMenuItem<_ProductSortOption>(
+                value: option,
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(option.label, textAlign: TextAlign.right),
+                ),
+              ),
+            )
+            .toList(),
+      ),
+    );
+  }
+}
+
 class _ProductsPage extends StatefulWidget {
   const _ProductsPage({
     required this.products,
@@ -36,17 +116,24 @@ class _ProductsPageState extends State<_ProductsPage> {
   final TextEditingController _searchController = TextEditingController();
   String _query = '';
   String? _selectedCategory;
+  _ProductSortOption _sortOption = _ProductSortOption.defaultOrder;
 
   List<String> get _categoryFilters => [
     'الكل',
     ...widget.categories.map((c) => c.main).toSet(),
   ];
 
+  String _mainLabel(String mainValue) {
+    final match = widget.categories.where((c) => c.main == mainValue);
+    if (match.isEmpty) return mainValue;
+    return match.first.displayMain;
+  }
+
   List<ProductItem> get _filteredProducts {
     if (widget.loading) return const [];
     final q = _query.trim().toLowerCase();
     final selected = _selectedCategory;
-    return widget.products.where((p) {
+    final filtered = widget.products.where((p) {
       final name = p.name.toLowerCase();
       final matchesQuery = q.isEmpty || name.contains(q);
       final cat = p.mainCategory?.toLowerCase().trim();
@@ -56,6 +143,7 @@ class _ProductsPageState extends State<_ProductsPage> {
           (cat != null && cat == selected.toLowerCase().trim());
       return matchesQuery && matchesCat;
     }).toList();
+    return _sortProducts(filtered, _sortOption);
   }
 
   void _nextPage(int totalPages) {
@@ -124,6 +212,16 @@ class _ProductsPageState extends State<_ProductsPage> {
                   textAlign: TextAlign.right,
                 ),
                 const SizedBox(height: 10),
+                _ProductSortField(
+                  value: _sortOption,
+                  onChanged: (value) {
+                    setState(() {
+                      _sortOption = value;
+                      _page = 0;
+                    });
+                  },
+                ),
+                const SizedBox(height: 10),
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   reverse: true,
@@ -133,7 +231,7 @@ class _ProductsPageState extends State<_ProductsPage> {
                           (cat) => Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 4),
                             child: ChoiceChip(
-                              label: Text(cat),
+                              label: Text(cat == 'الكل' ? cat : _mainLabel(cat)),
                               selected:
                                   _selectedCategory == cat ||
                                   (_selectedCategory == null && cat == 'الكل'),
@@ -188,7 +286,7 @@ class _ProductsPageState extends State<_ProductsPage> {
                         Text(
                           'صفحة ${safePage + 1} من $totalPages',
                           style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(color: Colors.grey.shade700),
+                              ?.copyWith(color: _appMuted(context)),
                         ),
                       ],
                     ),
@@ -233,6 +331,7 @@ class _CategoriesPageState extends State<_CategoriesPage> {
   final TextEditingController _categorySearchController =
       TextEditingController();
   String _categoryQuery = '';
+  _ProductSortOption _sortOption = _ProductSortOption.defaultOrder;
   static const int _categoryPageSize = 20;
   int _categoryPage = 0;
 
@@ -265,7 +364,7 @@ class _CategoriesPageState extends State<_CategoriesPage> {
   List<ProductItem> get _filteredProducts {
     final queryRaw = _categoryQuery.trim();
     final query = queryRaw.toLowerCase();
-    return widget.products.where((p) {
+    final filtered = widget.products.where((p) {
       if (_selectedMain != null &&
           _selectedMain != 'الكل' &&
           (p.mainCategory ?? '') != _selectedMain) {
@@ -283,20 +382,26 @@ class _CategoriesPageState extends State<_CategoriesPage> {
       }
       return true;
     }).toList();
+    return _sortProducts(filtered, _sortOption);
   }
 
   List<String> get _subsForMain {
     if (_selectedMain == null || _selectedMain == 'الكل') return [];
-    final node = widget.categories.firstWhere(
-      (c) => c.main == _selectedMain,
-      orElse: () =>
-          CategoryNode(main: _selectedMain ?? '', subs: [], image: null),
-    );
-    return node.subs;
+    final node = _selectedMainNode;
+    return node?.subs ?? const <String>[];
+  }
+
+  CategoryNode? get _selectedMainNode {
+    if (_selectedMain == null || _selectedMain == 'الكل') return null;
+    for (final node in widget.categories) {
+      if (node.main == _selectedMain) return node;
+    }
+    return null;
   }
 
   @override
   Widget build(BuildContext context) {
+    final selectedMainNode = _selectedMainNode;
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
@@ -322,6 +427,16 @@ class _CategoriesPageState extends State<_CategoriesPage> {
                     ),
                   ),
                   textAlign: TextAlign.right,
+                ),
+                const SizedBox(height: 12),
+                _ProductSortField(
+                  value: _sortOption,
+                  onChanged: (value) {
+                    setState(() {
+                      _sortOption = value;
+                      _categoryPage = 0;
+                    });
+                  },
                 ),
                 const SizedBox(height: 12),
                 Text(
@@ -351,9 +466,7 @@ class _CategoriesPageState extends State<_CategoriesPage> {
                       final selected =
                           _selectedMain == c.main ||
                           (_selectedMain == null && isAll);
-                      final icon = isAll
-                          ? Icons.all_inclusive
-                          : kCategoryIcons[c.main] ?? Icons.category_outlined;
+                      final imageUrl = c.image?.trim() ?? '';
                       return GestureDetector(
                         onTap: () {
                           setState(() {
@@ -370,22 +483,57 @@ class _CategoriesPageState extends State<_CategoriesPage> {
                               width: 64,
                               decoration: BoxDecoration(
                                 color: selected
-                                    ? Colors.black
-                                    : Colors.grey.shade200,
+                                    ? Theme.of(context).colorScheme.primary
+                                    : _appSoftSurface(context),
                                 shape: BoxShape.circle,
                               ),
-                              child: Icon(
-                                icon,
-                                color: selected
-                                    ? Colors.white
-                                    : Colors.grey.shade800,
-                              ),
+                              child: isAll
+                                  ? Icon(
+                                      Icons.all_inclusive,
+                                      color: selected
+                                          ? Theme.of(context).colorScheme.onPrimary
+                                          : Theme.of(
+                                              context,
+                                            ).colorScheme.onSurfaceVariant,
+                                    )
+                                  : ClipOval(
+                                      child: imageUrl.isNotEmpty
+                                          ? Image.network(
+                                              imageUrl,
+                                              fit: BoxFit.cover,
+                                              errorBuilder:
+                                                  (context, error, stackTrace) {
+                                                    return Icon(
+                                                      kCategoryIcons[c.main] ??
+                                                          Icons.category_outlined,
+                                                      color: selected
+                                                          ? Theme.of(
+                                                              context,
+                                                            ).colorScheme.onPrimary
+                                                          : Theme.of(
+                                                              context,
+                                                            ).colorScheme.onSurfaceVariant,
+                                                    );
+                                                  },
+                                            )
+                                          : Icon(
+                                              kCategoryIcons[c.main] ??
+                                                  Icons.category_outlined,
+                                              color: selected
+                                                  ? Theme.of(
+                                                      context,
+                                                    ).colorScheme.onPrimary
+                                                  : Theme.of(
+                                                      context,
+                                                    ).colorScheme.onSurfaceVariant,
+                                            ),
+                                    ),
                             ),
                             const SizedBox(height: 6),
                             SizedBox(
                               width: 110,
                               child: Text(
-                                c.main,
+                                isAll ? c.main : c.displayMain,
                                 maxLines: 2,
                                 softWrap: true,
                                 textAlign: TextAlign.center,
@@ -424,6 +572,8 @@ class _CategoriesPageState extends State<_CategoriesPage> {
                       itemBuilder: (context, index) {
                         final s = _subsForMain[index];
                         final selected = _selectedSub == s;
+                        final subImage = selectedMainNode?.imageForSub(s)?.trim() ?? '';
+                        final subLabel = selectedMainNode?.displaySub(s) ?? s;
                         return GestureDetector(
                           onTap: () {
                             setState(() {
@@ -439,24 +589,50 @@ class _CategoriesPageState extends State<_CategoriesPage> {
                                 width: 64,
                                 decoration: BoxDecoration(
                                   color: selected
-                                      ? Colors.black
-                                      : Colors.grey.shade200,
+                                      ? Theme.of(context).colorScheme.primary
+                                      : _appSoftSurface(context),
                                   shape: BoxShape.circle,
                                 ),
-                                child: Icon(
-                                  kSubcategoryIcons[s] ??
-                                      kSubcategoryIcons['default'] ??
-                                      Icons.label_important_outline,
-                                  color: selected
-                                      ? Colors.white
-                                      : Colors.grey.shade800,
+                                child: ClipOval(
+                                  child: subImage.isNotEmpty
+                                      ? Image.network(
+                                          subImage,
+                                          fit: BoxFit.cover,
+                                          errorBuilder:
+                                              (context, error, stackTrace) {
+                                                return Icon(
+                                                  kSubcategoryIcons[s] ??
+                                                      kSubcategoryIcons['default'] ??
+                                                      Icons.label_important_outline,
+                                                  color: selected
+                                                      ? Theme.of(
+                                                          context,
+                                                        ).colorScheme.onPrimary
+                                                      : Theme.of(
+                                                          context,
+                                                        ).colorScheme.onSurfaceVariant,
+                                                );
+                                              },
+                                        )
+                                      : Icon(
+                                          kSubcategoryIcons[s] ??
+                                              kSubcategoryIcons['default'] ??
+                                              Icons.label_important_outline,
+                                          color: selected
+                                              ? Theme.of(
+                                                  context,
+                                                ).colorScheme.onPrimary
+                                              : Theme.of(
+                                                  context,
+                                                ).colorScheme.onSurfaceVariant,
+                                        ),
                                 ),
                               ),
                               const SizedBox(height: 6),
                               SizedBox(
                                 width: 110,
                                 child: Text(
-                                  s,
+                                  subLabel,
                                   maxLines: 2,
                                   softWrap: true,
                                   textAlign: TextAlign.center,
@@ -547,7 +723,7 @@ class _CategoriesPageState extends State<_CategoriesPage> {
                                 Text(
                                   'صفحة ${safePage + 1} من $totalPages',
                                   style: Theme.of(context).textTheme.bodyMedium
-                                      ?.copyWith(color: Colors.grey.shade700),
+                                      ?.copyWith(color: _appMuted(context)),
                                 ),
                               ],
                             ),
@@ -614,12 +790,12 @@ class _ProductCard extends StatelessWidget {
                                   (context, child, loadingProgress) {
                                     if (loadingProgress == null) return child;
                                     return Container(
-                                      color: Colors.grey.shade200,
+                                      color: _appSoftSurface(context),
                                     );
                                   },
                               errorBuilder: (context, error, stackTrace) =>
                                   Container(
-                                    color: Colors.grey.shade200,
+                                    color: _appSoftSurface(context),
                                     child: const Icon(
                                       Icons.image_not_supported_outlined,
                                     ),
@@ -631,7 +807,9 @@ class _ProductCard extends StatelessWidget {
                             right: 8,
                             child: IconButton(
                               style: IconButton.styleFrom(
-                                backgroundColor: const Color(0xE6FFFFFF),
+                                backgroundColor: Theme.of(
+                                  context,
+                                ).colorScheme.surface.withValues(alpha: 0.9),
                                 padding: const EdgeInsets.all(8),
                               ),
                               onPressed: onToggleFavorite,
@@ -640,8 +818,8 @@ class _ProductCard extends StatelessWidget {
                                     ? Icons.favorite
                                     : Icons.favorite_border,
                                 color: isFavorite
-                                    ? Colors.redAccent
-                                    : Colors.black,
+                                    ? _appError(context)
+                                    : Theme.of(context).colorScheme.onSurface,
                               ),
                             ),
                           ),
@@ -654,9 +832,9 @@ class _ProductCard extends StatelessWidget {
                                 vertical: 6,
                               ),
                               decoration: BoxDecoration(
-                                color: Colors.white,
+                                color: Theme.of(context).colorScheme.surface,
                                 borderRadius: BorderRadius.circular(20),
-                                border: Border.all(color: Colors.grey.shade200),
+                                border: Border.all(color: _appBorder(context)),
                               ),
                               child: const Text(
                                 'جديد',
@@ -687,7 +865,7 @@ class _ProductCard extends StatelessWidget {
                     Text(
                       '${product.price.toStringAsFixed(2)} ₪',
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Colors.grey.shade700,
+                        color: _appMuted(context),
                       ),
                       textAlign: TextAlign.right,
                     )
@@ -695,7 +873,7 @@ class _ProductCard extends StatelessWidget {
                     Text(
                       'السعر عند الاختيار',
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Colors.grey.shade700,
+                        color: _appMuted(context),
                       ),
                       textAlign: TextAlign.right,
                     ),
@@ -744,14 +922,14 @@ class _ProductSkeleton extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                   child: SizedBox(
                     height: imageSize,
-                    child: Container(color: Colors.grey.shade200),
+                    child: Container(color: _appSoftSurface(context)),
                   ),
                 ),
                 const SizedBox(height: 10),
                 Container(
                   height: 14,
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade200,
+                    color: _appSoftSurface(context),
                     borderRadius: BorderRadius.circular(8),
                   ),
                 ),
@@ -760,7 +938,7 @@ class _ProductSkeleton extends StatelessWidget {
                   height: 12,
                   width: 80,
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade200,
+                    color: _appSoftSurface(context),
                     borderRadius: BorderRadius.circular(8),
                   ),
                 ),
@@ -768,7 +946,7 @@ class _ProductSkeleton extends StatelessWidget {
                 Container(
                   height: 40,
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade200,
+                    color: _appSoftSurface(context),
                     borderRadius: BorderRadius.circular(12),
                   ),
                 ),
@@ -776,7 +954,7 @@ class _ProductSkeleton extends StatelessWidget {
                 Container(
                   height: 36,
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade200,
+                    color: _appSoftSurface(context),
                     borderRadius: BorderRadius.circular(12),
                   ),
                 ),

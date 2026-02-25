@@ -26,6 +26,293 @@ class Benefit {
   });
 }
 
+class TrustBadge {
+  final String key;
+  final String title;
+  final String description;
+
+  const TrustBadge({
+    required this.key,
+    required this.title,
+    required this.description,
+  });
+}
+
+class TestimonialItem {
+  final String key;
+  final String name;
+  final String role;
+  final String quote;
+  final int rating;
+  final String imageUrl;
+
+  const TestimonialItem({
+    required this.key,
+    required this.name,
+    required this.role,
+    required this.quote,
+    this.rating = 5,
+    this.imageUrl = '',
+  });
+}
+
+Map<String, dynamic> _asMap(dynamic value) {
+  if (value is Map<String, dynamic>) return value;
+  if (value is Map) {
+    return value.map((key, val) => MapEntry(key.toString(), val));
+  }
+  return const <String, dynamic>{};
+}
+
+List<Map<String, dynamic>> _asMapList(dynamic value) {
+  if (value is! List) return const <Map<String, dynamic>>[];
+  return value.map(_asMap).where((item) => item.isNotEmpty).toList();
+}
+
+String _asCleanString(dynamic value) => value?.toString().trim() ?? '';
+
+int _asInt(dynamic value, {int fallback = 0}) {
+  if (value is num) return value.toInt();
+  return int.tryParse(value?.toString() ?? '') ?? fallback;
+}
+
+class SiteLocalizedText {
+  final String ar;
+  final String he;
+
+  const SiteLocalizedText({this.ar = '', this.he = ''});
+
+  factory SiteLocalizedText.fromJson(dynamic json) {
+    if (json is String) {
+      return SiteLocalizedText(ar: json.trim());
+    }
+    final map = _asMap(json);
+    return SiteLocalizedText(
+      ar: _asCleanString(map['ar']),
+      he: _asCleanString(map['he']),
+    );
+  }
+
+  String preferred({String locale = 'ar'}) {
+    final normalizedLocale = locale.trim().toLowerCase();
+    if (normalizedLocale == 'he' && he.isNotEmpty) return he;
+    if (normalizedLocale == 'ar' && ar.isNotEmpty) return ar;
+    if (ar.isNotEmpty) return ar;
+    if (he.isNotEmpty) return he;
+    return '';
+  }
+}
+
+class SiteHeroSettings {
+  final SiteLocalizedText kicker;
+  final SiteLocalizedText title;
+  final SiteLocalizedText subtitle;
+  final String imageUrl;
+  final SiteLocalizedText calloutLabel;
+  final SiteLocalizedText calloutValue;
+  final SiteLocalizedText primaryCtaLabel;
+  final SiteLocalizedText secondaryCtaLabel;
+
+  const SiteHeroSettings({
+    this.kicker = const SiteLocalizedText(),
+    this.title = const SiteLocalizedText(),
+    this.subtitle = const SiteLocalizedText(),
+    this.imageUrl = '',
+    this.calloutLabel = const SiteLocalizedText(),
+    this.calloutValue = const SiteLocalizedText(),
+    this.primaryCtaLabel = const SiteLocalizedText(),
+    this.secondaryCtaLabel = const SiteLocalizedText(),
+  });
+
+  factory SiteHeroSettings.fromJson(dynamic json) {
+    final map = _asMap(json);
+    return SiteHeroSettings(
+      kicker: SiteLocalizedText.fromJson(map['kicker']),
+      title: SiteLocalizedText.fromJson(map['title']),
+      subtitle: SiteLocalizedText.fromJson(map['subtitle']),
+      imageUrl: _asCleanString(map['imageUrl']),
+      calloutLabel: SiteLocalizedText.fromJson(map['calloutLabel']),
+      calloutValue: SiteLocalizedText.fromJson(map['calloutValue']),
+      primaryCtaLabel: SiteLocalizedText.fromJson(map['primaryCtaLabel']),
+      secondaryCtaLabel: SiteLocalizedText.fromJson(map['secondaryCtaLabel']),
+    );
+  }
+}
+
+class SiteCategoryItem {
+  final String value;
+  final SiteLocalizedText label;
+  final String imageUrl;
+  final int order;
+
+  const SiteCategoryItem({
+    required this.value,
+    this.label = const SiteLocalizedText(),
+    this.imageUrl = '',
+    this.order = 0,
+  });
+
+  factory SiteCategoryItem.fromJson(dynamic json) {
+    final map = _asMap(json);
+    return SiteCategoryItem(
+      value: _asCleanString(map['value']),
+      label: SiteLocalizedText.fromJson(map['label']),
+      imageUrl: _asCleanString(map['imageUrl']),
+      order: _asInt(map['order']),
+    );
+  }
+}
+
+class SiteSubCategoryItem {
+  final String main;
+  final String value;
+  final SiteLocalizedText label;
+  final String imageUrl;
+  final int order;
+
+  const SiteSubCategoryItem({
+    required this.main,
+    required this.value,
+    this.label = const SiteLocalizedText(),
+    this.imageUrl = '',
+    this.order = 0,
+  });
+
+  factory SiteSubCategoryItem.fromJson(dynamic json) {
+    final map = _asMap(json);
+    return SiteSubCategoryItem(
+      main: _asCleanString(map['main']),
+      value: _asCleanString(map['value']),
+      label: SiteLocalizedText.fromJson(map['label']),
+      imageUrl: _asCleanString(map['imageUrl']),
+      order: _asInt(map['order']),
+    );
+  }
+}
+
+class SiteSettingsData {
+  final SiteHeroSettings hero;
+  final List<SiteCategoryItem> homeCategories;
+  final List<SiteCategoryItem> categoryMenuMain;
+  final List<SiteSubCategoryItem> categoryMenuSub;
+
+  const SiteSettingsData({
+    this.hero = const SiteHeroSettings(),
+    this.homeCategories = const <SiteCategoryItem>[],
+    this.categoryMenuMain = const <SiteCategoryItem>[],
+    this.categoryMenuSub = const <SiteSubCategoryItem>[],
+  });
+
+  factory SiteSettingsData.fromJson(Map<String, dynamic> json) {
+    final categoryMenu = _asMap(json['categoryMenu']);
+
+    final homeCategories = _asMapList(json['homeCategories'])
+        .map(SiteCategoryItem.fromJson)
+        .where((item) => item.value.isNotEmpty)
+        .toList();
+
+    final categoryMenuMain = _asMapList(categoryMenu['main'])
+        .map(SiteCategoryItem.fromJson)
+        .where((item) => item.value.isNotEmpty)
+        .toList();
+
+    final categoryMenuSub = _asMapList(categoryMenu['sub'])
+        .map(SiteSubCategoryItem.fromJson)
+        .where((item) => item.main.isNotEmpty && item.value.isNotEmpty)
+        .toList();
+
+    return SiteSettingsData(
+      hero: SiteHeroSettings.fromJson(json['hero']),
+      homeCategories: homeCategories,
+      categoryMenuMain: categoryMenuMain,
+      categoryMenuSub: categoryMenuSub,
+    );
+  }
+
+  List<SiteCategoryItem> get sortedHomeCategories {
+    final list = [...homeCategories];
+    list.sort((a, b) {
+      final byOrder = a.order.compareTo(b.order);
+      return byOrder != 0 ? byOrder : a.value.compareTo(b.value);
+    });
+    return list;
+  }
+
+  List<SiteCategoryItem> get sortedCategoryMenuMain {
+    final list = [...categoryMenuMain];
+    list.sort((a, b) {
+      final byOrder = a.order.compareTo(b.order);
+      return byOrder != 0 ? byOrder : a.value.compareTo(b.value);
+    });
+    return list;
+  }
+
+  List<SiteSubCategoryItem> get sortedCategoryMenuSub {
+    final list = [...categoryMenuSub];
+    list.sort((a, b) {
+      final byMain = a.main.compareTo(b.main);
+      if (byMain != 0) return byMain;
+      final byOrder = a.order.compareTo(b.order);
+      return byOrder != 0 ? byOrder : a.value.compareTo(b.value);
+    });
+    return list;
+  }
+}
+
+enum SiteAdTargetType { none, product, url }
+
+enum SiteAdShowMode { oncePerSession, always }
+
+class SiteAdData {
+  final bool enabled;
+  final SiteLocalizedText title;
+  final SiteLocalizedText text;
+  final String imageUrl;
+  final SiteAdTargetType targetType;
+  final String targetValue;
+  final SiteAdShowMode showMode;
+  final String dismissKey;
+
+  const SiteAdData({
+    this.enabled = false,
+    this.title = const SiteLocalizedText(),
+    this.text = const SiteLocalizedText(),
+    this.imageUrl = '',
+    this.targetType = SiteAdTargetType.none,
+    this.targetValue = '',
+    this.showMode = SiteAdShowMode.oncePerSession,
+    this.dismissKey = 'site-ad:0',
+  });
+
+  factory SiteAdData.fromJson(Map<String, dynamic> json) {
+    final targetTypeRaw = _asCleanString(json['targetType']);
+    final showModeRaw = _asCleanString(json['showMode']);
+    final dismissKeyRaw = _asCleanString(json['dismissKey']);
+
+    final targetType = switch (targetTypeRaw) {
+      'product' => SiteAdTargetType.product,
+      'url' => SiteAdTargetType.url,
+      _ => SiteAdTargetType.none,
+    };
+
+    final showMode = switch (showModeRaw) {
+      'always' => SiteAdShowMode.always,
+      _ => SiteAdShowMode.oncePerSession,
+    };
+
+    return SiteAdData(
+      enabled: json['enabled'] == true,
+      title: SiteLocalizedText.fromJson(json['title']),
+      text: SiteLocalizedText.fromJson(json['text']),
+      imageUrl: _asCleanString(json['imageUrl']),
+      targetType: targetType,
+      targetValue: _asCleanString(json['targetValue']),
+      showMode: showMode,
+      dismissKey: dismissKeyRaw.isNotEmpty ? dismissKeyRaw : 'site-ad:0',
+    );
+  }
+}
+
 class ProductItem {
   final String id;
   final String name;
@@ -68,6 +355,62 @@ class ProductItem {
       return 'منتج';
     }
 
+    double? readDouble(dynamic value) {
+      if (value is num) return value.toDouble();
+      return double.tryParse(value?.toString() ?? '');
+    }
+
+    DateTime? readDate(dynamic value) {
+      if (value is DateTime) return value;
+      final raw = value?.toString();
+      if (raw == null || raw.isEmpty) return null;
+      return DateTime.tryParse(raw);
+    }
+
+    bool isDiscountActive(Map<String, dynamic> discount, DateTime now) {
+      final discountValue = readDouble(discount['value']) ?? 0;
+      if (discountValue <= 0) return false;
+      final startAt = readDate(discount['startAt']);
+      final endAt = readDate(discount['endAt']);
+      if (startAt != null && now.isBefore(startAt)) return false;
+      if (endAt != null && now.isAfter(endAt)) return false;
+      return true;
+    }
+
+    double? resolveVariantPrice(Map<String, dynamic> variant, DateTime now) {
+      final finalAmount = readDouble(variant['finalAmount']);
+      if (finalAmount != null) return finalAmount < 0 ? 0 : finalAmount;
+
+      final finalPrice = readDouble(variant['finalPrice']);
+      if (finalPrice != null) return finalPrice < 0 ? 0 : finalPrice;
+
+      final rawPrice = variant['price'];
+      final priceMap = _asMap(rawPrice);
+      final amount = readDouble(
+        priceMap.isNotEmpty ? priceMap['amount'] : rawPrice,
+      );
+      if (amount == null) return null;
+
+      final rawDiscount = priceMap.isNotEmpty
+          ? priceMap['discount']
+          : variant['discount'];
+      final discountMap = _asMap(rawDiscount);
+      if (discountMap.isNotEmpty && isDiscountActive(discountMap, now)) {
+        final discountValue = readDouble(discountMap['value']) ?? 0;
+        final discountType = discountMap['type']?.toString().trim().toLowerCase();
+        if (discountValue > 0) {
+          if (discountType == 'amount') {
+            final discounted = amount - discountValue;
+            return discounted < 0 ? 0 : discounted;
+          }
+          final discounted = amount - (amount * discountValue / 100);
+          return discounted < 0 ? 0 : discounted;
+        }
+      }
+
+      return amount < 0 ? 0 : amount;
+    }
+
     final id =
         json['_id']?.toString() ??
         json['id']?.toString() ??
@@ -88,24 +431,27 @@ class ProductItem {
     String? variantMeasure;
     String? variantColor;
     String? variantSku;
+    double? minVariantPrice;
 
     final vars = json['vars'];
+    final now = DateTime.now();
     if (vars is List && vars.isNotEmpty) {
-      final firstVar = vars.cast<Map<String, dynamic>?>().firstWhere(
-        (v) => v != null,
-        orElse: () => null,
-      );
-      if (firstVar != null) {
-        final priceMap = firstVar['price'];
-        final finalAmount = firstVar['finalAmount'];
-        final amountFromPrice = priceMap is Map && priceMap['amount'] is num
-            ? (priceMap['amount'] as num).toDouble()
-            : null;
-        final discounted = finalAmount is num ? finalAmount.toDouble() : null;
-        variantPrice = discounted ?? amountFromPrice;
+      Map<String, dynamic>? firstVar;
+      for (final rawVar in vars) {
+        final varMap = _asMap(rawVar);
+        if (varMap.isEmpty) continue;
+        firstVar ??= varMap;
+        final currentPrice = resolveVariantPrice(varMap, now);
+        if (currentPrice == null) continue;
+        if (minVariantPrice == null || currentPrice < minVariantPrice!) {
+          minVariantPrice = currentPrice;
+        }
+      }
 
-        final color = firstVar['color'];
-        final colorImages = color is Map && color['images'] is List
+      if (firstVar != null) {
+        variantPrice = resolveVariantPrice(firstVar, now);
+        final color = _asMap(firstVar['color']);
+        final colorImages = color['images'] is List
             ? (color['images'] as List).whereType<String>()
             : const Iterable<String>.empty();
         final varImages = firstVar['images'] is List
@@ -115,7 +461,7 @@ class ProductItem {
             (colorImages.isNotEmpty ? colorImages.first : null) ??
             (varImages.isNotEmpty ? varImages.first : null);
         final measure = firstVar['measure']?.toString();
-        final colorName = color is Map ? color['name']?.toString() : null;
+        final colorName = color['name']?.toString();
         final parts = [
           measure,
           colorName,
@@ -124,8 +470,8 @@ class ProductItem {
         variantId = firstVar['_id']?.toString();
         variantMeasure = measure;
         variantColor = colorName;
-        final stock = firstVar['stock'];
-        if (stock is Map && stock['sku'] != null) {
+        final stock = _asMap(firstVar['stock']);
+        if (stock['sku'] != null) {
           variantSku = stock['sku'].toString();
         } else if (firstVar['sku'] != null) {
           variantSku = firstVar['sku'].toString();
@@ -136,6 +482,7 @@ class ProductItem {
     final priceRaw =
         json['minPrice'] ??
         json['finalPrice'] ??
+        minVariantPrice ??
         variantPrice ??
         (priceField is Map ? priceField['amount'] : priceField) ??
         json['basePrice'];
@@ -495,6 +842,29 @@ const List<Category> categories = [
   ),
 ];
 
+const List<TrustBadge> trustBadges = [
+  TrustBadge(
+    key: 'delivery',
+    title: 'توصيل سريع',
+    description: 'شحن منظم وتحديثات مستمرة للطلب.',
+  ),
+  TrustBadge(
+    key: 'support',
+    title: 'دعم مباشر',
+    description: 'فريق مختص يجاوبك بسرعة ووضوح.',
+  ),
+  TrustBadge(
+    key: 'secure',
+    title: 'دفع محمي',
+    description: 'معالجة آمنة عبر مزودي دفع معتمدين.',
+  ),
+  TrustBadge(
+    key: 'returns',
+    title: 'استبدال مرن',
+    description: 'سياسات واضحة لخدمة ما بعد البيع.',
+  ),
+];
+
 const List<Benefit> benefits = [
   Benefit(
     key: 'delivery',
@@ -519,6 +889,30 @@ const List<Benefit> benefits = [
     iconUrl: 'https://www.svgrepo.com/show/468263/check-mark-circle.svg',
     title: 'منتجات أصلية 100٪',
     description: 'ضمان الأصالة والجودة',
+  ),
+];
+
+const List<TestimonialItem> testimonials = [
+  TestimonialItem(
+    key: '1',
+    name: 'أحمد صالح',
+    role: 'صاحب ورشة نجارة',
+    quote: 'الجودة ممتازة والأسعار واضحة، والطلب يصل بسرعة.',
+    rating: 5,
+  ),
+  TestimonialItem(
+    key: '2',
+    name: 'ميساء عواد',
+    role: 'مصممة مطابخ',
+    quote: 'التصنيفات دقيقة والخيارات واسعة، سهّل علي اختيار القطع.',
+    rating: 5,
+  ),
+  TestimonialItem(
+    key: '3',
+    name: 'محمد دويك',
+    role: 'منجّد أثاث',
+    quote: 'التعامل محترف، ومتابعة الطلبات ممتازة من البداية للنهاية.',
+    rating: 5,
   ),
 ];
 

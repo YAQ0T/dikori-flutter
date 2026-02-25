@@ -92,7 +92,7 @@ class _OrdersPageState extends State<_OrdersPage> {
                   children: [
                     Text(
                       error,
-                      style: TextStyle(color: Colors.red.shade700),
+                      style: TextStyle(color: _appError(context)),
                       textAlign: TextAlign.right,
                     ),
                     const SizedBox(height: 12),
@@ -111,7 +111,7 @@ class _OrdersPageState extends State<_OrdersPage> {
                     Text(
                       'لا توجد طلبات حالية.',
                       style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: Colors.grey.shade700,
+                        color: _appMuted(context),
                       ),
                       textAlign: TextAlign.center,
                     ),
@@ -194,13 +194,13 @@ class _OrderTile extends StatelessWidget {
                   Text(
                     'المجموع: ${order.total.toStringAsFixed(2)} ₪ — ${order.itemsCount} عنصر',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Colors.grey.shade700,
+                      color: _appMuted(context),
                     ),
                   ),
                   Text(
                     'الحالة: ${order.status}',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Colors.grey.shade600,
+                      color: _appMuted(context),
                     ),
                   ),
                 ],
@@ -210,7 +210,7 @@ class _OrderTile extends StatelessWidget {
                 dateLabel,
                 style: Theme.of(
                   context,
-                ).textTheme.bodySmall?.copyWith(color: Colors.grey.shade600),
+                ).textTheme.bodySmall?.copyWith(color: _appMuted(context)),
               ),
             ],
           ),
@@ -243,7 +243,7 @@ class _OrderDetailRow extends StatelessWidget {
             value,
             style: Theme.of(
               context,
-            ).textTheme.bodyMedium?.copyWith(color: Colors.grey.shade700),
+            ).textTheme.bodyMedium?.copyWith(color: _appMuted(context)),
             textAlign: TextAlign.left,
           ),
         ],
@@ -263,9 +263,9 @@ class _OrderLineItemTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.grey.shade50,
+        color: _appSoftSurface(context),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: _appBorder(context)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -283,7 +283,7 @@ class _OrderLineItemTile extends StatelessWidget {
               variantLabel,
               style: Theme.of(
                 context,
-              ).textTheme.bodySmall?.copyWith(color: Colors.grey.shade600),
+              ).textTheme.bodySmall?.copyWith(color: _appMuted(context)),
               textAlign: TextAlign.right,
             ),
           ],
@@ -299,7 +299,7 @@ class _OrderLineItemTile extends StatelessWidget {
                 'سعر الوحدة: ${item.price.toStringAsFixed(2)} ₪',
                 style: Theme.of(
                   context,
-                ).textTheme.bodyMedium?.copyWith(color: Colors.grey.shade700),
+                ).textTheme.bodyMedium?.copyWith(color: _appMuted(context)),
               ),
             ],
           ),
@@ -308,7 +308,7 @@ class _OrderLineItemTile extends StatelessWidget {
             'المجموع: ${item.total.toStringAsFixed(2)} ₪',
             style: Theme.of(
               context,
-            ).textTheme.bodySmall?.copyWith(color: Colors.grey.shade600),
+            ).textTheme.bodySmall?.copyWith(color: _appMuted(context)),
             textAlign: TextAlign.right,
           ),
         ],

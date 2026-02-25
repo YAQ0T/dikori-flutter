@@ -100,6 +100,8 @@ class _HomePageState extends State<HomePage> {
   };
 
   List<ProductItem> _products = [];
+  List<ProductItem> _recommendedProducts = [];
+  List<ProductItem> _newArrivalProducts = [];
   bool _loadingProducts = true;
   String? _productsError;
 
@@ -117,6 +119,13 @@ class _HomePageState extends State<HomePage> {
   bool _loadingOrders = false;
   String? _ordersError;
   List<CategoryNode> _categories = [];
+  List<CategoryNode> _homeCategories = [];
+  SiteSettingsData? _siteSettings;
+  SiteAdData? _siteAd;
+  bool _showingSiteAdDialog = false;
+  bool _siteAdDismissedInView = false;
+  String _siteAdViewToken = '';
+  static final Set<String> _dismissedSiteAdSession = <String>{};
   List<AppNotification> _notifications = [];
   bool _loadingNotifications = false;
   String? _notificationsError;
@@ -211,8 +220,294 @@ class _HomePageState extends State<HomePage> {
   List<ProductItem> get _allProducts =>
       _products.isNotEmpty ? _products : [...suggestedProducts, ...newArrivals];
 
+  String get _heroTitleText {
+    final title = _siteSettings?.hero.title.preferred();
+    return title != null && title.isNotEmpty ? title : heroTitle;
+  }
+
+  String get _heroKickerText {
+    final kicker = _siteSettings?.hero.kicker.preferred();
+    return kicker != null && kicker.isNotEmpty ? kicker : 'ديكوري';
+  }
+
+  String get _heroSubtitleText {
+    final subtitle = _siteSettings?.hero.subtitle.preferred();
+    return subtitle != null && subtitle.isNotEmpty ? subtitle : heroSubtitle;
+  }
+
+  String get _heroPrimaryCtaText {
+    final cta = _siteSettings?.hero.primaryCtaLabel.preferred();
+    return cta != null && cta.isNotEmpty ? cta : 'ابدأ التسوّق الآن';
+  }
+
+  String get _heroSecondaryCtaText {
+    final cta = _siteSettings?.hero.secondaryCtaLabel.preferred();
+    return cta != null && cta.isNotEmpty ? cta : 'تصفّح الفئات';
+  }
+
+  String get _heroCalloutLabelText {
+    final callout = _siteSettings?.hero.calloutLabel.preferred();
+    return callout != null && callout.isNotEmpty ? callout : 'ثقة العملاء';
+  }
+
+  String get _heroCalloutValueText {
+    final callout = _siteSettings?.hero.calloutValue.preferred();
+    return callout != null && callout.isNotEmpty ? callout : 'منتجات أصلية 100٪';
+  }
+
+  String get _heroImageUrl {
+    final imageUrl = _siteSettings?.hero.imageUrl.trim();
+    if (imageUrl != null && imageUrl.isNotEmpty) return imageUrl;
+
+    for (final node in _homeCategories) {
+      final image = node.image?.trim() ?? '';
+      if (image.isNotEmpty) return image;
+    }
+    for (final c in categories) {
+      if (c.image.trim().isNotEmpty) return c.image;
+    }
+    return 'https://placehold.co/900x1125/png?text=Hero';
+  }
+
   int get _unreadNotificationsCount =>
       _notifications.where((n) => !n.isRead).length;
+
+  bool get _isCustomerView {
+    final role = (_user?.role ?? '').trim().toLowerCase();
+    return role != 'admin' && role != 'dealer';
+  }
+
+  String _localizedSiteText(SiteLocalizedText text, {String fallback = ''}) {
+    final languageCode = Localizations.localeOf(context).languageCode;
+    final localized = text.preferred(locale: languageCode);
+    if (localized.isNotEmpty) return localized;
+    return fallback;
+  }
+
+  void _resetSiteAdViewIfNeeded() {
+    final dismissKey = _siteAd?.dismissKey ?? '';
+    final nextViewToken = 'tab:$_navIndex|$dismissKey';
+    if (_siteAdViewToken != nextViewToken) {
+      _siteAdViewToken = nextViewToken;
+      _siteAdDismissedInView = false;
+    }
+  }
+
+  void _dismissSiteAd({required SiteAdData ad}) {
+    if (ad.showMode == SiteAdShowMode.oncePerSession &&
+        ad.dismissKey.isNotEmpty) {
+      _dismissedSiteAdSession.add(ad.dismissKey);
+    }
+    _siteAdDismissedInView = true;
+  }
+
+  Future<void> _openSiteAdUrl(String urlValue) async {
+    final urlText = urlValue.trim();
+    if (urlText.isEmpty) return;
+
+    final uri = Uri.tryParse(urlText);
+    if (uri == null || !(uri.scheme == 'http' || uri.scheme == 'https')) {
+      _showDesignMessage('رابط الإعلان غير صالح.');
+      return;
+    }
+
+    try {
+      final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!opened && mounted) {
+        _showDesignMessage('تعذر فتح الرابط.');
+      }
+    } catch (_) {
+      if (mounted) {
+        _showDesignMessage('تعذر فتح الرابط.');
+      }
+    }
+  }
+
+  Future<void> _openSiteAdProduct(String productId) async {
+    final id = productId.trim();
+    if (id.isEmpty) return;
+
+    ProductItem? product;
+    for (final item in _allProducts) {
+      if (item.id == id) {
+        product = item;
+        break;
+      }
+    }
+    product ??= await _api.fetchProductById(id);
+
+    if (!mounted) return;
+    if (product == null) {
+      _showDesignMessage('المنتج غير متوفر حاليًا.');
+      return;
+    }
+
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ProductDetailsPage(
+          product: product!,
+          onAddToCart: _addToCart,
+          api: _api,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openSiteAdDialog(SiteAdData ad) async {
+    final title = _localizedSiteText(ad.title, fallback: 'إعلان جديد');
+    final bodyText = _localizedSiteText(ad.text);
+    final hasAction =
+        (ad.targetType == SiteAdTargetType.product ||
+            ad.targetType == SiteAdTargetType.url) &&
+        ad.targetValue.trim().isNotEmpty;
+    final actionLabel = ad.targetType == SiteAdTargetType.product
+        ? 'عرض المنتج'
+        : 'فتح الرابط';
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        Future<void> closeOnly() async {
+          Navigator.of(dialogContext).pop();
+          _dismissSiteAd(ad: ad);
+        }
+
+        Future<void> handleAction() async {
+          Navigator.of(dialogContext).pop();
+          _dismissSiteAd(ad: ad);
+
+          final value = ad.targetValue.trim();
+          if (ad.targetType == SiteAdTargetType.product) {
+            await _openSiteAdProduct(value);
+            return;
+          }
+          if (ad.targetType == SiteAdTargetType.url) {
+            await _openSiteAdUrl(value);
+          }
+        }
+
+        return Directionality(
+          textDirection: TextDirection.rtl,
+          child: WillPopScope(
+            onWillPop: () async {
+              _dismissSiteAd(ad: ad);
+              return true;
+            },
+            child: Dialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(22),
+              ),
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 22,
+                vertical: 24,
+              ),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 520),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (ad.imageUrl.trim().isNotEmpty)
+                        ClipRRect(
+                          borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(22),
+                          ),
+                          child: AspectRatio(
+                            aspectRatio: 16 / 10,
+                            child: Image.network(
+                              ad.imageUrl.trim(),
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, error, stackTrace) =>
+                                  Container(
+                                    color: _appSoftSurface(context),
+                                    child: const Icon(
+                                      Icons.image_not_supported_outlined,
+                                      size: 36,
+                                    ),
+                                  ),
+                            ),
+                          ),
+                        ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              title,
+                              textAlign: TextAlign.right,
+                              style: Theme.of(context).textTheme.titleLarge
+                                  ?.copyWith(fontWeight: FontWeight.w800),
+                            ),
+                            if (bodyText.trim().isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              Text(
+                                bodyText,
+                                textAlign: TextAlign.right,
+                                style: Theme.of(context).textTheme.bodyMedium
+                                    ?.copyWith(
+                                      color: _appMuted(context),
+                                      height: 1.5,
+                                    ),
+                              ),
+                            ],
+                            const SizedBox(height: 16),
+                            Row(
+                              children: [
+                                OutlinedButton(
+                                  onPressed: closeOnly,
+                                  child: const Text('تخطي'),
+                                ),
+                                const SizedBox(width: 10),
+                                if (hasAction)
+                                  Expanded(
+                                    child: ElevatedButton(
+                                      onPressed: handleAction,
+                                      child: Text(actionLabel),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _maybeShowSiteAd() {
+    if (!mounted || _showingSiteAdDialog) return;
+    final ad = _siteAd;
+    if (ad == null || !ad.enabled || !_isCustomerView) return;
+
+    _resetSiteAdViewIfNeeded();
+
+    if (_siteAdDismissedInView) return;
+    if (ad.showMode == SiteAdShowMode.oncePerSession &&
+        ad.dismissKey.isNotEmpty &&
+        _dismissedSiteAdSession.contains(ad.dismissKey)) {
+      return;
+    }
+
+    _showingSiteAdDialog = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        _showingSiteAdDialog = false;
+        return;
+      }
+      await _openSiteAdDialog(ad);
+      _showingSiteAdDialog = false;
+    });
+  }
 
   @override
   void initState() {
@@ -223,7 +518,10 @@ class _HomePageState extends State<HomePage> {
   Future<void> _bootstrap() async {
     await _restoreSession();
     await Future.wait([
+      _loadSiteSettings(),
+      _loadSiteAd(),
       _loadProducts(),
+      _loadHomeCollections(),
       _loadFavorites(),
       _loadCart(),
       _loadProfile(),
@@ -266,6 +564,34 @@ class _HomePageState extends State<HomePage> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Future<void> _loadSiteSettings() async {
+    try {
+      final data = await _api.fetchSiteSettings();
+      if (!mounted) return;
+      setState(() {
+        _siteSettings = data;
+      });
+    } catch (_) {
+      // Keep static fallback values.
+    } finally {
+      _buildCategories();
+    }
+  }
+
+  Future<void> _loadSiteAd() async {
+    try {
+      final data = await _api.fetchSiteAd();
+      if (!mounted) return;
+      setState(() {
+        _siteAd = data;
+      });
+    } catch (_) {
+      // Keep no-ad fallback.
+    } finally {
+      _maybeShowSiteAd();
+    }
+  }
+
   Future<void> _loadProducts() async {
     setState(() {
       _loadingProducts = true;
@@ -273,19 +599,37 @@ class _HomePageState extends State<HomePage> {
     });
     try {
       final data = await _api.fetchProducts(limit: 500);
+      if (!mounted) return;
       setState(() {
         _products = data;
       });
-      _buildCategories();
-    } catch (e) {
+    } catch (_) {
+      if (!mounted) return;
       setState(() {
         _productsError = 'تعذر تحميل المنتجات، تم استخدام بيانات محلية.';
         _products = [];
       });
     } finally {
+      _buildCategories();
       if (mounted) {
         setState(() => _loadingProducts = false);
       }
+    }
+  }
+
+  Future<void> _loadHomeCollections() async {
+    try {
+      final results = await Future.wait<List<ProductItem>>([
+        _api.fetchHomeRecommended(),
+        _api.fetchHomeNewArrivals(),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _recommendedProducts = results[0];
+        _newArrivalProducts = results[1];
+      });
+    } catch (_) {
+      // Keep local fallback lists inside home sections.
     }
   }
 
@@ -428,7 +772,7 @@ class _HomePageState extends State<HomePage> {
                     Text(
                       'لا توجد عناصر في هذا الطلب.',
                       style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
-                        color: Colors.grey.shade700,
+                        color: _appMuted(ctx),
                       ),
                       textAlign: TextAlign.right,
                     )
@@ -524,6 +868,7 @@ class _HomePageState extends State<HomePage> {
       _pendingCategoryMain = initialMain;
       _navIndex = 1;
     });
+    _maybeShowSiteAd();
     if (initialMain != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -540,38 +885,193 @@ class _HomePageState extends State<HomePage> {
 
   void _buildCategories() {
     final map = <String, Set<String>>{};
+    final productMainImages = <String, String>{};
+    final productSubImages = <String, Map<String, String>>{};
     for (final p in _allProducts) {
       final main = p.mainCategory?.trim();
       final sub = p.subCategory?.trim();
       if (main == null || main.isEmpty) continue;
       map.putIfAbsent(main, () => <String>{});
+      final productImage = p.image.trim();
+      if (productImage.isNotEmpty && !productMainImages.containsKey(main)) {
+        productMainImages[main] = productImage;
+      }
       if (sub != null && sub.isNotEmpty) {
         map[main]!.add(sub);
+        if (productImage.isNotEmpty) {
+          final byMain = productSubImages.putIfAbsent(main, () => <String, String>{});
+          byMain.putIfAbsent(sub, () => productImage);
+        }
       }
     }
 
-    final imageLookup = {for (final c in categories) c.value: c.image};
+    final settings = _siteSettings;
+    final homeItems = settings?.sortedHomeCategories ?? const <SiteCategoryItem>[];
+    final menuMainItems =
+        settings?.sortedCategoryMenuMain ?? const <SiteCategoryItem>[];
+    final menuSubItems =
+        settings?.sortedCategoryMenuSub ?? const <SiteSubCategoryItem>[];
 
-    final nodes =
-        map.entries
-            .map(
-              (e) => CategoryNode(
-                main: e.key,
-                subs: e.value.toList()..sort(),
-                image: imageLookup[e.key],
-              ),
-            )
-            .toList()
-          ..sort((a, b) => a.main.compareTo(b.main));
-
-    if (nodes.isEmpty) {
-      for (final c in categories) {
-        nodes.add(CategoryNode(main: c.value, subs: [], image: c.image));
+    for (final item in homeItems) {
+      if (item.value.isNotEmpty) {
+        map.putIfAbsent(item.value, () => <String>{});
       }
     }
 
+    for (final item in menuMainItems) {
+      if (item.value.isNotEmpty) {
+        map.putIfAbsent(item.value, () => <String>{});
+      }
+    }
+
+    for (final item in menuSubItems) {
+      if (item.main.isEmpty || item.value.isEmpty) continue;
+      map.putIfAbsent(item.main, () => <String>{});
+      map[item.main]!.add(item.value);
+    }
+
+    final orderedMains = <String>[];
+    void addMain(String value) {
+      final normalized = value.trim();
+      if (normalized.isEmpty || orderedMains.contains(normalized)) return;
+      orderedMains.add(normalized);
+    }
+
+    for (final item in homeItems) {
+      addMain(item.value);
+    }
+    for (final item in menuMainItems) {
+      addMain(item.value);
+    }
+
+    final remainingMains = map.keys.where((key) => !orderedMains.contains(key)).toList()
+      ..sort();
+    for (final value in remainingMains) {
+      addMain(value);
+    }
+
+    if (orderedMains.isEmpty) {
+      for (final item in categories) {
+        addMain(item.value);
+      }
+    }
+
+    final fallbackImages = {for (final c in categories) c.value: c.image};
+    final fallbackLabels = {for (final c in categories) c.value: c.label};
+    final homeImages = {
+      for (final item in homeItems)
+        if (item.value.isNotEmpty && item.imageUrl.isNotEmpty)
+          item.value: item.imageUrl,
+    };
+    final menuMainImages = {
+      for (final item in menuMainItems)
+        if (item.value.isNotEmpty && item.imageUrl.isNotEmpty)
+          item.value: item.imageUrl,
+    };
+    final homeLabels = {
+      for (final item in homeItems)
+        if (item.value.isNotEmpty && item.label.preferred().isNotEmpty)
+          item.value: item.label.preferred(),
+    };
+    final menuMainLabels = {
+      for (final item in menuMainItems)
+        if (item.value.isNotEmpty && item.label.preferred().isNotEmpty)
+          item.value: item.label.preferred(),
+    };
+    final menuSubLabelsByMain = <String, Map<String, String>>{};
+    final menuSubImagesByMain = <String, Map<String, String>>{};
+    final menuSubOrderByMain = <String, Map<String, int>>{};
+    var menuSubOrderIndex = 0;
+    for (final item in menuSubItems) {
+      if (item.main.isEmpty || item.value.isEmpty) continue;
+
+      if (item.label.preferred().isNotEmpty) {
+        final byMain = menuSubLabelsByMain.putIfAbsent(
+          item.main,
+          () => <String, String>{},
+        );
+        byMain[item.value] = item.label.preferred();
+      }
+
+      if (item.imageUrl.isNotEmpty) {
+        final byMain = menuSubImagesByMain.putIfAbsent(
+          item.main,
+          () => <String, String>{},
+        );
+        byMain[item.value] = item.imageUrl;
+      }
+
+      final byMain = menuSubOrderByMain.putIfAbsent(
+        item.main,
+        () => <String, int>{},
+      );
+      byMain.putIfAbsent(item.value, () => menuSubOrderIndex++);
+    }
+
+    final nodesByMain = <String, CategoryNode>{};
+    for (final main in orderedMains) {
+      final subs = (map[main] ?? <String>{}).toList();
+      final orderMap = menuSubOrderByMain[main] ?? const <String, int>{};
+      subs.sort((a, b) {
+        final aOrder = orderMap[a];
+        final bOrder = orderMap[b];
+        if (aOrder != null && bOrder != null) {
+          return aOrder.compareTo(bOrder);
+        }
+        if (aOrder != null) return -1;
+        if (bOrder != null) return 1;
+        return a.compareTo(b);
+      });
+
+      final subImages = <String, String>{};
+      final menuSubImages = menuSubImagesByMain[main] ?? const <String, String>{};
+      final productSubs = productSubImages[main] ?? const <String, String>{};
+      for (final sub in subs) {
+        final fromMenu = menuSubImages[sub]?.trim() ?? '';
+        if (fromMenu.isNotEmpty) {
+          subImages[sub] = fromMenu;
+          continue;
+        }
+        final fromProduct = productSubs[sub]?.trim() ?? '';
+        if (fromProduct.isNotEmpty) {
+          subImages[sub] = fromProduct;
+        }
+      }
+
+      final label =
+          (homeLabels[main] ?? menuMainLabels[main] ?? fallbackLabels[main] ?? main).trim();
+
+      nodesByMain[main] = CategoryNode(
+        main: main,
+        subs: subs,
+        image:
+            homeImages[main] ??
+            menuMainImages[main] ??
+            productMainImages[main] ??
+            fallbackImages[main],
+        label: label.isNotEmpty ? label : main,
+        subLabels: menuSubLabelsByMain[main] ?? const <String, String>{},
+        subImages: subImages,
+      );
+    }
+
+    final categoryNodes = orderedMains
+        .map((main) => nodesByMain[main])
+        .whereType<CategoryNode>()
+        .toList();
+
+    final homeNodes = <CategoryNode>[];
+    if (homeItems.isNotEmpty) {
+      for (final item in homeItems) {
+        final node = nodesByMain[item.value];
+        if (node != null) homeNodes.add(node);
+      }
+    }
+
+    if (!mounted) return;
     setState(() {
-      _categories = nodes;
+      _categories = categoryNodes;
+      _homeCategories = homeNodes.isNotEmpty ? homeNodes : categoryNodes;
     });
   }
 
@@ -609,6 +1109,22 @@ class _HomePageState extends State<HomePage> {
           _cart[index] = _cart[index].copyWith(quantity: updated);
         }
       }
+    });
+  }
+
+  void _setCartQuantity(CartItem item, int quantity) {
+    setState(() {
+      final index = _cart.indexWhere(
+        (cartItem) => cartItem.product.id == item.product.id,
+      );
+      if (index < 0) return;
+
+      if (quantity <= 0) {
+        _cart.removeAt(index);
+        return;
+      }
+
+      _cart[index] = _cart[index].copyWith(quantity: quantity);
     });
   }
 
@@ -771,7 +1287,7 @@ class _HomePageState extends State<HomePage> {
                     const SizedBox(height: 8),
                     Text(
                       error!,
-                      style: TextStyle(color: Colors.red.shade700),
+                      style: TextStyle(color: _appError(ctx)),
                       textAlign: TextAlign.right,
                     ),
                   ],
@@ -779,12 +1295,12 @@ class _HomePageState extends State<HomePage> {
                   ElevatedButton(
                     onPressed: submitting ? null : submit,
                     child: submitting
-                        ? const SizedBox(
+                        ? SizedBox(
                             height: 18,
                             width: 18,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              color: Colors.white,
+                              color: Theme.of(ctx).colorScheme.onPrimary,
                             ),
                           )
                         : const Text('تأكيد الطلب'),
@@ -861,7 +1377,7 @@ class _HomePageState extends State<HomePage> {
                           padding: const EdgeInsets.only(bottom: 8),
                           child: Text(
                             '$unread إشعار غير مقروء',
-                            style: TextStyle(color: Colors.grey.shade700),
+                            style: TextStyle(color: _appMuted(context)),
                             textAlign: TextAlign.right,
                           ),
                         ),
@@ -873,7 +1389,7 @@ class _HomePageState extends State<HomePage> {
                               Expanded(
                                 child: Text(
                                   _notificationsError!,
-                                  style: TextStyle(color: Colors.red.shade700),
+                                  style: TextStyle(color: _appError(context)),
                                   textAlign: TextAlign.right,
                                 ),
                               ),
@@ -902,7 +1418,7 @@ class _HomePageState extends State<HomePage> {
                               const SizedBox(height: 8),
                               Text(
                                 'لا توجد إشعارات بعد',
-                                style: TextStyle(color: Colors.grey.shade700),
+                                style: TextStyle(color: _appMuted(context)),
                               ),
                             ],
                           ),
@@ -946,7 +1462,7 @@ class _HomePageState extends State<HomePage> {
                                         dateText,
                                         textAlign: TextAlign.right,
                                         style: TextStyle(
-                                          color: Colors.grey.shade600,
+                                          color: _appMuted(context),
                                           fontSize: 12,
                                         ),
                                       ),
@@ -1048,7 +1564,10 @@ class _HomePageState extends State<HomePage> {
         _loadOrders(),
         _loadNotifications(),
       ]);
-      if (mounted) _showDesignMessage('تم تسجيل الدخول بنجاح');
+      if (mounted) {
+        _showDesignMessage('تم تسجيل الدخول بنجاح');
+        _maybeShowSiteAd();
+      }
     } catch (e) {
       if (mounted) {
         if (e is ApiException && e.status == 403) {
@@ -1078,6 +1597,7 @@ class _HomePageState extends State<HomePage> {
       _notifications.clear();
     });
     _showDesignMessage('تم تسجيل الخروج');
+    _maybeShowSiteAd();
   }
 
   Future<void> _openAuthSheet({_AuthMode mode = _AuthMode.login}) async {
@@ -1286,7 +1806,7 @@ class _HomePageState extends State<HomePage> {
                       const SizedBox(height: 8),
                       Text(
                         _authError!,
-                        style: TextStyle(color: Colors.red.shade700),
+                        style: TextStyle(color: _appError(context)),
                         textAlign: TextAlign.right,
                       ),
                     ],
@@ -1332,7 +1852,6 @@ class _HomePageState extends State<HomePage> {
         bottomNavigationBar: NavigationBar(
           selectedIndex: _navIndex,
           height: 72,
-          indicatorColor: Colors.black.withValues(alpha: 0.08),
           destinations: const [
             NavigationDestination(
               icon: Icon(Icons.home_outlined),
@@ -1365,6 +1884,7 @@ class _HomePageState extends State<HomePage> {
               _showCategories();
             } else {
               setState(() => _navIndex = value);
+              _maybeShowSiteAd();
             }
           },
         ),
@@ -1408,6 +1928,7 @@ class _HomePageState extends State<HomePage> {
         items: _cart,
         onIncrement: _incrementCart,
         onDecrement: _decrementCart,
+        onSetQuantity: _setCartQuantity,
         onCheckout: _startCheckout,
         placingOrder: _placingOrder,
       );
@@ -1426,10 +1947,23 @@ class _HomePageState extends State<HomePage> {
                 isFavorite: _isFavorite,
                 onToggleFavorite: _toggleFavorite,
                 onBrowseAll: () => _showCategories(),
-                categories: _categories,
+                categories: _homeCategories.isNotEmpty
+                    ? _homeCategories
+                    : _categories,
                 onCategorySelected: _openCategory,
                 onStartShopping: () => _showCategories(),
+                onExploreCategories: () => _showCategories(),
+                heroKicker: _heroKickerText,
+                heroTitle: _heroTitleText,
+                heroSubtitle: _heroSubtitleText,
+                heroPrimaryCtaLabel: _heroPrimaryCtaText,
+                heroSecondaryCtaLabel: _heroSecondaryCtaText,
+                heroCalloutLabel: _heroCalloutLabelText,
+                heroCalloutValue: _heroCalloutValueText,
+                heroImageUrl: _heroImageUrl,
                 products: _allProducts,
+                recommendedProducts: _recommendedProducts,
+                newArrivalProducts: _newArrivalProducts,
                 isLoading: _loadingProducts,
                 errorText: _productsError,
                 fetchVariants: _api.fetchVariants,
@@ -1525,15 +2059,15 @@ class _HomePageState extends State<HomePage> {
                         vertical: 2,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.redAccent,
+                        color: _appError(context),
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text(
                         _unreadNotificationsCount > 9
                             ? '9+'
                             : _unreadNotificationsCount.toString(),
-                        style: const TextStyle(
-                          color: Colors.white,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onError,
                           fontSize: 10,
                           fontWeight: FontWeight.bold,
                         ),
@@ -1552,8 +2086,6 @@ class _HomePageState extends State<HomePage> {
                 padding: const EdgeInsets.only(left: 8, right: 12),
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.black,
-                    foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 14,
                       vertical: 10,

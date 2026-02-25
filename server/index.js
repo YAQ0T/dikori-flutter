@@ -46,6 +46,7 @@ const corsBaseOptions = {
   allowedHeaders: [
     "Content-Type",
     "Authorization",
+    "x-dikori-client",
     "x-forwarded-for",
     "x-lahza-signature",
   ],

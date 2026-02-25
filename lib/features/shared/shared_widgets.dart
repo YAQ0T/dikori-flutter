@@ -21,7 +21,7 @@ class _PlaceholderPage extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 64, color: Colors.grey.shade500),
+              Icon(icon, size: 64, color: _appMuted(context)),
               const SizedBox(height: 12),
               Text(
                 title,
@@ -34,7 +34,7 @@ class _PlaceholderPage extends StatelessWidget {
                 description,
                 style: Theme.of(
                   context,
-                ).textTheme.bodyMedium?.copyWith(color: Colors.grey.shade600),
+                ).textTheme.bodyMedium?.copyWith(color: _appMuted(context)),
                 textAlign: TextAlign.center,
               ),
             ],
@@ -102,14 +102,27 @@ class _Footer extends StatelessWidget {
           'جميع الحقوق محفوظة © $year متجر ديكوري',
           style: Theme.of(
             context,
-          ).textTheme.bodyMedium?.copyWith(color: Colors.grey.shade700),
+          ).textTheme.bodyMedium?.copyWith(color: _appMuted(context)),
+          textAlign: TextAlign.center,
         ),
         const SizedBox(height: 8),
         Text(
           'للتواصل معنا: 0597 000 000',
           style: Theme.of(
             context,
-          ).textTheme.bodyMedium?.copyWith(color: Colors.grey.shade700),
+          ).textTheme.bodyMedium?.copyWith(color: _appMuted(context)),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          alignment: WrapAlignment.center,
+          spacing: 14,
+          runSpacing: 6,
+          children: const [
+            Text('Facebook'),
+            Text('Instagram'),
+            Text('WhatsApp'),
+          ],
         ),
         const SizedBox(height: 10),
         Wrap(
@@ -124,7 +137,41 @@ class _Footer extends StatelessWidget {
             ),
           ],
         ),
+        const SizedBox(height: 8),
+        Wrap(
+          alignment: WrapAlignment.center,
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            _FooterPaymentChip(label: 'VISA'),
+            _FooterPaymentChip(label: 'Mastercard'),
+          ],
+        ),
       ],
+    );
+  }
+}
+
+class _FooterPaymentChip extends StatelessWidget {
+  const _FooterPaymentChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: _appSoftSurface(context),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _appBorder(context)),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+      ),
     );
   }
 }

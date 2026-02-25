@@ -224,17 +224,94 @@ class ApiClient {
     int limit = 500,
     int page = 1,
   }) async {
-    final response = await _client.get(
-      _uri('/products', {'limit': '$limit', 'page': '$page'}),
-      headers: _headers(),
-    );
-    final data = _decode(response);
-    final list = data['items'] ?? data['data'] ?? data['products'];
-    if (list is! List) return [];
-    return list
-        .whereType<Map<String, dynamic>>()
-        .map(ProductItem.fromJson)
-        .toList();
+    Future<List<ProductItem>> fetchFrom(String path) async {
+      final response = await _client.get(
+        _uri(path, {'limit': '$limit', 'page': '$page'}),
+        headers: _headers(),
+      );
+      final data = _decode(response);
+      final list = data['items'] ?? data['data'] ?? data['products'];
+      if (list is! List) return [];
+      return list
+          .whereType<Map<String, dynamic>>()
+          .map(ProductItem.fromJson)
+          .toList();
+    }
+
+    try {
+      // Match web behavior: with-stats computes minPrice from all variants.
+      return await fetchFrom('/products/with-stats');
+    } catch (_) {
+      // Backward-compatible fallback for older server endpoints.
+      return fetchFrom('/products');
+    }
+  }
+
+  Future<List<ProductItem>> fetchHomeRecommended() =>
+      _fetchHomeCollection('/home-collections/recommended');
+
+  Future<List<ProductItem>> fetchHomeNewArrivals() =>
+      _fetchHomeCollection('/home-collections/new');
+
+  Future<List<ProductItem>> _fetchHomeCollection(String path) async {
+    try {
+      final response = await _client.get(_uri(path), headers: _headers());
+      final data = _decode(response);
+      final list = data['items'] ?? data['data'] ?? data['products'] ?? data;
+      if (list is! List) return [];
+      return list
+          .whereType<Map<String, dynamic>>()
+          .map(ProductItem.fromJson)
+          .toList();
+    } on ApiException catch (e) {
+      if (e.status == 404) return [];
+      rethrow;
+    }
+  }
+
+  Future<SiteSettingsData?> fetchSiteSettings() async {
+    try {
+      final response = await _client.get(
+        _uri('/site-settings'),
+        headers: _headers(),
+      );
+      final data = _decode(response);
+      if (data.isEmpty) return null;
+      return SiteSettingsData.fromJson(data);
+    } on ApiException catch (e) {
+      if (e.status == 404) return null;
+      rethrow;
+    }
+  }
+
+  Future<SiteAdData?> fetchSiteAd() async {
+    try {
+      final response = await _client.get(_uri('/site-ad'), headers: _headers());
+      final data = _decode(response);
+      if (data.isEmpty) return null;
+      return SiteAdData.fromJson(data);
+    } on ApiException catch (e) {
+      if (e.status == 404) return null;
+      rethrow;
+    }
+  }
+
+  Future<ProductItem?> fetchProductById(String id) async {
+    final productId = id.trim();
+    if (productId.isEmpty) return null;
+
+    try {
+      final response = await _client.get(
+        _uri('/products/$productId'),
+        headers: _headers(),
+      );
+      final data = _decode(response);
+      if (data.isEmpty) return null;
+      return ProductItem.fromJson(data);
+    } on ApiException catch (e) {
+      if (e.status == 404) return null;
+      rethrow;
+    }
   }
 
   Future<List<ProductItem>> fetchFavorites() async {

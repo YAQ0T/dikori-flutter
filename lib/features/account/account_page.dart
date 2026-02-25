@@ -188,7 +188,7 @@ class _AccountPage extends StatelessWidget {
                           ? 'يمكنك متابعة طلباتك وحالة الشحن مباشرة.'
                           : 'سجّل الدخول لمراجعة طلباتك ومتابعة الشحن.',
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Colors.grey.shade700,
+                        color: _appMuted(context),
                       ),
                       textAlign: TextAlign.right,
                     ),
@@ -255,7 +255,7 @@ class _AccountPage extends StatelessWidget {
                       Text(
                         'سجّل الدخول لعرض طلباتك.',
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Colors.grey.shade700,
+                          color: _appMuted(context),
                         ),
                       )
                     else if (loadingOrders)
@@ -263,14 +263,14 @@ class _AccountPage extends StatelessWidget {
                     else if (ordersError != null)
                       Text(
                         ordersError!,
-                        style: TextStyle(color: Colors.red.shade700),
+                        style: TextStyle(color: _appError(context)),
                         textAlign: TextAlign.right,
                       )
                     else if (orders.isEmpty)
                       Text(
                         'لا توجد طلبات حالية.',
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Colors.grey.shade700,
+                          color: _appMuted(context),
                         ),
                       )
                     else

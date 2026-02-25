@@ -5,6 +5,7 @@ class _CartPage extends StatelessWidget {
     required this.items,
     required this.onIncrement,
     required this.onDecrement,
+    required this.onSetQuantity,
     required this.onCheckout,
     required this.placingOrder,
   });
@@ -12,6 +13,7 @@ class _CartPage extends StatelessWidget {
   final List<CartItem> items;
   final void Function(CartItem) onIncrement;
   final void Function(CartItem) onDecrement;
+  final void Function(CartItem, int quantity) onSetQuantity;
   final VoidCallback onCheckout;
   final bool placingOrder;
 
@@ -41,6 +43,7 @@ class _CartPage extends StatelessWidget {
               itemBuilder: (context, index) {
                 final item = items[index];
                 return Card(
+                  key: ValueKey(item.product.id),
                   child: Padding(
                     padding: const EdgeInsets.all(12),
                     child: Row(
@@ -50,7 +53,7 @@ class _CartPage extends StatelessWidget {
                           child: Container(
                             height: 68,
                             width: 68,
-                            color: Colors.grey.shade100,
+                            color: _appSoftSurface(context),
                             child: Image.network(
                               item.product.image,
                               fit: BoxFit.cover,
@@ -64,7 +67,7 @@ class _CartPage extends StatelessWidget {
                                   (context, child, loadingProgress) {
                                     if (loadingProgress == null) return child;
                                     return Container(
-                                      color: Colors.grey.shade100,
+                                      color: _appSoftSurface(context),
                                     );
                                   },
                               errorBuilder: (context, error, stackTrace) =>
@@ -91,14 +94,14 @@ class _CartPage extends StatelessWidget {
                               Text(
                                 '${item.product.price.toStringAsFixed(2)} ₪',
                                 style: Theme.of(context).textTheme.bodyMedium
-                                    ?.copyWith(color: Colors.grey.shade700),
+                                    ?.copyWith(color: _appMuted(context)),
                                 textAlign: TextAlign.right,
                               ),
                               const SizedBox(height: 4),
                               Text(
                                 'المجموع: ${item.total.toStringAsFixed(2)} ₪',
                                 style: Theme.of(context).textTheme.bodySmall
-                                    ?.copyWith(color: Colors.grey.shade600),
+                                    ?.copyWith(color: _appMuted(context)),
                                 textAlign: TextAlign.right,
                               ),
                             ],
@@ -111,9 +114,12 @@ class _CartPage extends StatelessWidget {
                               onPressed: () => onDecrement(item),
                               icon: const Icon(Icons.remove_circle_outline),
                             ),
-                            Text(
-                              item.quantity.toString(),
-                              style: Theme.of(context).textTheme.titleMedium,
+                            SizedBox(
+                              width: 64,
+                              child: _CartQuantityField(
+                                quantity: item.quantity,
+                                onCommit: (value) => onSetQuantity(item, value),
+                              ),
                             ),
                             IconButton(
                               onPressed: () => onIncrement(item),
@@ -130,8 +136,8 @@ class _CartPage extends StatelessWidget {
           ),
           Container(
             decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border(top: BorderSide(color: Colors.grey.shade200)),
+              color: Theme.of(context).colorScheme.surface,
+              border: Border(top: BorderSide(color: _appBorder(context))),
               boxShadow: const [
                 BoxShadow(
                   color: Color(0x11000000),
@@ -165,12 +171,12 @@ class _CartPage extends StatelessWidget {
                   child: ElevatedButton(
                     onPressed: placingOrder ? null : onCheckout,
                     child: placingOrder
-                        ? const SizedBox(
+                        ? SizedBox(
                             height: 20,
                             width: 20,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              color: Colors.white,
+                              color: Theme.of(context).colorScheme.onPrimary,
                             ),
                           )
                         : const Text('إتمام الشراء'),
@@ -180,6 +186,84 @@ class _CartPage extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _CartQuantityField extends StatefulWidget {
+  const _CartQuantityField({
+    required this.quantity,
+    required this.onCommit,
+  });
+
+  final int quantity;
+  final ValueChanged<int> onCommit;
+
+  @override
+  State<_CartQuantityField> createState() => _CartQuantityFieldState();
+}
+
+class _CartQuantityFieldState extends State<_CartQuantityField> {
+  late final TextEditingController _controller;
+  late final FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.quantity.toString());
+    _focusNode = FocusNode();
+    _focusNode.addListener(_onFocusChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant _CartQuantityField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.quantity != oldWidget.quantity && !_focusNode.hasFocus) {
+      _controller.text = widget.quantity.toString();
+    }
+  }
+
+  void _onFocusChanged() {
+    if (!_focusNode.hasFocus) {
+      _commit();
+    }
+  }
+
+  void _commit() {
+    final raw = _controller.text.trim();
+    final parsed = int.tryParse(raw);
+    if (parsed == null) {
+      _controller.text = widget.quantity.toString();
+      return;
+    }
+    widget.onCommit(parsed);
+  }
+
+  @override
+  void dispose() {
+    _focusNode
+      ..removeListener(_onFocusChanged)
+      ..dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: _controller,
+      focusNode: _focusNode,
+      textAlign: TextAlign.center,
+      keyboardType: const TextInputType.numberWithOptions(
+        decimal: false,
+        signed: false,
+      ),
+      textInputAction: TextInputAction.done,
+      onSubmitted: (_) => _commit(),
+      decoration: const InputDecoration(
+        isDense: true,
+        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       ),
     );
   }

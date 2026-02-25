@@ -96,10 +96,10 @@ class _ProductDetailsPageState extends State<ProductDetailsPage> {
                         gaplessPlayback: true,
                         loadingBuilder: (context, child, loadingProgress) {
                           if (loadingProgress == null) return child;
-                          return Container(color: Colors.grey.shade200);
+                          return Container(color: _appSoftSurface(context));
                         },
                         errorBuilder: (context, error, stackTrace) => Container(
-                          color: Colors.grey.shade200,
+                          color: _appSoftSurface(context),
                           child: const Icon(Icons.image_not_supported_outlined),
                         ),
                       );
@@ -122,7 +122,7 @@ class _ProductDetailsPageState extends State<ProductDetailsPage> {
                     : 'السعر عند الاختيار',
                 style: Theme.of(
                   context,
-                ).textTheme.titleLarge?.copyWith(color: Colors.grey.shade700),
+                ).textTheme.titleLarge?.copyWith(color: _appMuted(context)),
                 textAlign: TextAlign.right,
               ),
               if (_selected?.compareAt != null &&
@@ -130,7 +130,7 @@ class _ProductDetailsPageState extends State<ProductDetailsPage> {
                 Text(
                   'السعر قبل الخصم: ${_selected!.compareAt!.toStringAsFixed(2)} ₪',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Colors.redAccent,
+                    color: _appError(context),
                     decoration: TextDecoration.lineThrough,
                   ),
                   textAlign: TextAlign.right,
@@ -141,7 +141,7 @@ class _ProductDetailsPageState extends State<ProductDetailsPage> {
                 Text(
                   widget.product.description!,
                   style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: Colors.grey.shade700,
+                    color: _appMuted(context),
                     height: 1.6,
                   ),
                   textAlign: TextAlign.right,
@@ -150,7 +150,7 @@ class _ProductDetailsPageState extends State<ProductDetailsPage> {
                 Text(
                   'لا يوجد وصف متاح لهذا المنتج.',
                   style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: Colors.grey.shade700,
+                    color: _appMuted(context),
                     height: 1.6,
                   ),
                   textAlign: TextAlign.right,
