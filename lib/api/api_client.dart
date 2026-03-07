@@ -98,8 +98,6 @@ class ApiClient {
   Map<String, String> _headers() {
     final headers = <String, String>{
       'Content-Type': 'application/json',
-      // Bypass reCAPTCHA for native clients
-      'x-dikori-client': 'ios-app',
     };
     if (_token != null && _token!.isNotEmpty) {
       headers['Authorization'] = 'Bearer $_token';
@@ -202,6 +200,7 @@ class ApiClient {
     required String token,
     required String password,
     String? email,
+    String? phone,
   }) async {
     await _client.post(
       _uri('/auth/password/reset'),
@@ -210,6 +209,7 @@ class ApiClient {
         'token': token,
         'password': password,
         if (email != null && email.isNotEmpty) 'email': email,
+        if (phone != null && phone.isNotEmpty) 'phone': phone,
       }),
     );
   }

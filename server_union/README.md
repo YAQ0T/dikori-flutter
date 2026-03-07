@@ -42,4 +42,5 @@ Expected response:
 ## Notes
 
 - API base URL: `http://localhost:3001/api`
+- In production, set `CLIENT_ORIGINS` and keep `ENFORCE_HTTPS=true`.
 - This folder is independent from `server/` and `new server folder/`.

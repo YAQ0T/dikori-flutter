@@ -70,16 +70,8 @@ const prepareCardSchema = orderCreateSchema.extend({
 const idParamSchema = z.object({ id: z.string().min(1) });
 const referenceParamSchema = z.object({ reference: z.string().min(1) });
 
-const isIOSAppRequest = (req) => {
-  if (!req || typeof req.get !== "function") {
-    return false;
-  }
-
-  const header = req.get("x-dikori-client") || req.get("x-app-client");
-  if (!header) return false;
-
-  return String(header).trim().toLowerCase() === "ios-app";
-};
+const isAuthenticatedOrderRequest = (req) =>
+  Boolean(req?.user && typeof req.user.id === "string" && req.user.id.trim());
 
 async function ensureRecaptcha(req, res) {
   if (
@@ -89,7 +81,8 @@ async function ensureRecaptcha(req, res) {
     return true;
   }
 
-  if (isIOSAppRequest(req)) {
+  // Authenticated users already passed JWT verification in verifyTokenOptional.
+  if (isAuthenticatedOrderRequest(req)) {
     return true;
   }
 

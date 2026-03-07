@@ -564,9 +564,12 @@ router.post(
     if (!ok) {
       user.resetPasswordAttempts = attempts + 1;
       await user.save();
-      return res
-        .status(429)
-        .json({ message: RESET_PASSWORD_THROTTLE_MESSAGE });
+      if (user.resetPasswordAttempts >= RESET_PASSWORD_MAX_ATTEMPTS) {
+        return res
+          .status(429)
+          .json({ message: RESET_PASSWORD_THROTTLE_MESSAGE });
+      }
+      return res.status(400).json({ message: "رمز غير صحيح أو منتهي" });
     }
 
     const newPassword = String(password);

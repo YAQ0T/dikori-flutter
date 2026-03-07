@@ -1,0 +1,43 @@
+name: Security Audit
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  audit-server:
+    name: Audit server npm deps
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      - run: npm audit --audit-level=high
+
+  audit-web:
+    name: Audit web npm deps
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: "web application /dikori - ecommerce/Dikori-ecommerce/client/ama"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: "web application /dikori - ecommerce/Dikori-ecommerce/client/ama/package-lock.json"
+      - run: npm ci
+      - run: npm audit --audit-level=high

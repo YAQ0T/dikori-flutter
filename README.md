@@ -82,8 +82,10 @@ Required:
 
 Common optional:
 - `PORT` (default 3001)
-- `CLIENT_ORIGINS` comma-separated list for CORS; if unset, localhost is allowed
-  in dev
+- `CLIENT_ORIGINS` comma-separated list for CORS
+  - Required in production
+  - If unset in dev, localhost origins are allowed
+- `ENFORCE_HTTPS` (`true`/`false`, default `true` in production) rejects non-HTTPS requests
 - `PAY_CURRENCY` (default `ILS`)
 - `PAYMENT_MINOR_TOLERANCE` (minor units; default 1)
 - `LAHZA_SECRET_KEY` for Lahza payments + webhook verification

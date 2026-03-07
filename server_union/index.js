@@ -36,6 +36,13 @@ const ENV_CLIENT_ORIGINS = parseOriginList(process.env.CLIENT_ORIGINS);
 const DEFAULT_DEV_ORIGIN_MATCHERS = [
   /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i,
 ];
+const ENFORCE_HTTPS = String(process.env.ENFORCE_HTTPS || "true") === "true";
+
+if (process.env.NODE_ENV === "production" && !ENV_CLIENT_ORIGINS.length) {
+  throw new Error(
+    "CLIENT_ORIGINS must be configured in production to protect CORS boundaries."
+  );
+}
 
 const isOriginAllowed = (origin) => {
   if (!origin) return true; // Allow non-CORS/SSR requests.
@@ -51,7 +58,6 @@ const corsBaseOptions = {
   allowedHeaders: [
     "Content-Type",
     "Authorization",
-    "x-dikori-client",
     "x-forwarded-for",
     "x-lahza-signature",
   ],
@@ -73,6 +79,23 @@ app.use(
 
 /* ---------- Trust Proxy (قبل استخدام IP) ---------- */
 app.set("trust proxy", 1);
+
+const isHttpsRequest = (req) => {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  return req.secure || forwardedProto === "https";
+};
+
+if (process.env.NODE_ENV === "production" && ENFORCE_HTTPS) {
+  app.use((req, res, next) => {
+    if (isHttpsRequest(req)) {
+      return next();
+    }
+    return res.status(400).json({ message: "HTTPS is required." });
+  });
+}
 
 /* ---------- Security / Compression / Request ID ---------- */
 app.use(

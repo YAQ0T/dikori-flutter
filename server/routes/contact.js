@@ -22,7 +22,11 @@ router.post("/", async (req, res) => {
   }
 
   try {
-    // Optional reCAPTCHA verification if token + secret exist
+    // In production, if server secret exists then client token is mandatory.
+    if (process.env.RECAPTCHA_SECRET && !recaptchaToken) {
+      return res.status(400).json({ error: "reCAPTCHA token is required" });
+    }
+
     if (recaptchaToken && process.env.RECAPTCHA_SECRET) {
       try {
         const verifyUrl = "https://www.google.com/recaptcha/api/siteverify";

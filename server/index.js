@@ -7,6 +7,7 @@ const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
 const crypto = require("crypto");
+const { createRateLimiter } = require("./middleware/rateLimit");
 require("dotenv").config();
 
 const app = express();
@@ -31,6 +32,13 @@ const ENV_CLIENT_ORIGINS = parseOriginList(process.env.CLIENT_ORIGINS);
 const DEFAULT_DEV_ORIGIN_MATCHERS = [
   /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i,
 ];
+const ENFORCE_HTTPS = String(process.env.ENFORCE_HTTPS || "true") === "true";
+
+if (process.env.NODE_ENV === "production" && !ENV_CLIENT_ORIGINS.length) {
+  throw new Error(
+    "CLIENT_ORIGINS must be configured in production to protect CORS boundaries."
+  );
+}
 
 const isOriginAllowed = (origin) => {
   if (!origin) return true; // Allow non-CORS/SSR requests.
@@ -46,7 +54,6 @@ const corsBaseOptions = {
   allowedHeaders: [
     "Content-Type",
     "Authorization",
-    "x-dikori-client",
     "x-forwarded-for",
     "x-lahza-signature",
   ],
@@ -68,6 +75,44 @@ app.use(
 
 /* ---------- Trust Proxy (قبل استخدام IP) ---------- */
 app.set("trust proxy", 1);
+
+const isHttpsRequest = (req) => {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  return req.secure || forwardedProto === "https";
+};
+
+if (process.env.NODE_ENV === "production" && ENFORCE_HTTPS) {
+  app.use((req, res, next) => {
+    if (isHttpsRequest(req)) {
+      return next();
+    }
+
+    return res.status(400).json({ message: "HTTPS is required." });
+  });
+}
+
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+  );
+
+  if (process.env.NODE_ENV === "production" && isHttpsRequest(req)) {
+    res.setHeader(
+      "Strict-Transport-Security",
+      "max-age=31536000; includeSubDomains"
+    );
+  }
+
+  next();
+});
 
 /* ---------- Request Logger ---------- */
 app.use((req, res, next) => {
@@ -357,19 +402,46 @@ if (process.env.NODE_ENV !== "test") {
 }
 
 /* ---------- Routes ---------- */
-app.use("/api/contact", require("./routes/contact"));
-app.use("/api/auth", require("./routes/auth"));
+const apiLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 400,
+  message: "Too many API requests. Please try again later.",
+});
+const authLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 40,
+  message: "Too many authentication attempts. Please try again later.",
+});
+const ordersLimiter = createRateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 60,
+  message: "Too many order-related requests. Please try again later.",
+});
+const contactLimiter = createRateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 12,
+  message: "Too many contact requests. Please try again later.",
+});
+const recaptchaLimiter = createRateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 120,
+  message: "Too many reCAPTCHA verification requests. Please try again later.",
+});
+
+app.use("/api", apiLimiter);
+app.use("/api/contact", contactLimiter, require("./routes/contact"));
+app.use("/api/auth", authLimiter, require("./routes/auth"));
 app.use("/api/variants", require("./routes/variants"));
 app.use("/api/products", require("./routes/products"));
-app.use("/api/orders", require("./routes/orders"));
+app.use("/api/orders", ordersLimiter, require("./routes/orders"));
 app.use("/api/users", require("./routes/user"));
 app.use("/api/notifications", require("./routes/notifications"));
 app.use("/api/discount-rules", require("./routes/discountRules"));
 app.use("/api/discounts", require("./routes/discounts"));
 app.use("/api/home-collections", require("./routes/homeCollections"));
-app.use("/api/recaptcha", require("./routes/recaptcha"));
-app.use("/api/payments", require("./routes/payments"));
-app.use("/api/orders", require("./routes/order-status"));
+app.use("/api/recaptcha", recaptchaLimiter, require("./routes/recaptcha"));
+app.use("/api/payments", ordersLimiter, require("./routes/payments"));
+app.use("/api/orders", ordersLimiter, require("./routes/order-status"));
 
 /* ---------- health ---------- */
 app.get("/healthz", (_req, res) => res.json({ ok: true }));

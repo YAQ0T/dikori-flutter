@@ -355,14 +355,18 @@ router.post("/password/request-reset", async (req, res) => {
 ========================= */
 router.post("/password/reset", async (req, res) => {
   try {
-    const { token, password, email } = req.body || {};
-    if (!token || !password) {
-      return res.status(400).json({ message: "بيانات ناقصة" });
+    const { token, password, email, phone } = req.body || {};
+    const normEmail = normalizeEmail(email);
+    const normPhone = normalizePhone(phone);
+    if (!token || !password || (!normEmail && !normPhone)) {
+      return res.status(400).json({
+        message: "أدخل رمز الاستعادة وكلمة المرور مع البريد أو رقم الجوال",
+      });
     }
 
-    const user = email
-      ? await User.findOne({ email: String(email).toLowerCase() })
-      : await User.findOne({ resetPasswordCodeHash: { $exists: true } });
+    const user = normEmail
+      ? await User.findOne({ email: normEmail })
+      : await User.findOne({ phone: normPhone });
 
     if (!user) {
       return res.status(400).json({ message: "رمز غير صحيح أو منتهي" });
@@ -389,9 +393,12 @@ router.post("/password/reset", async (req, res) => {
     if (!ok) {
       user.resetPasswordAttempts = attempts + 1;
       await user.save();
-      return res
-        .status(429)
-        .json({ message: RESET_PASSWORD_THROTTLE_MESSAGE });
+      if (user.resetPasswordAttempts >= RESET_PASSWORD_MAX_ATTEMPTS) {
+        return res
+          .status(429)
+          .json({ message: RESET_PASSWORD_THROTTLE_MESSAGE });
+      }
+      return res.status(400).json({ message: "رمز غير صحيح أو منتهي" });
     }
 
     const newPassword = String(password);
