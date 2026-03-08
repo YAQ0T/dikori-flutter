@@ -43,4 +43,8 @@ Expected response:
 
 - API base URL: `http://localhost:3001/api`
 - In production, set `CLIENT_ORIGINS` and keep `ENFORCE_HTTPS=true`.
+- Guest checkout anti-bot protection supports either:
+  - Web: reCAPTCHA token (`RECAPTCHA_SECRET` configured)
+  - Mobile: Human Proof challenge via `POST /api/human-proof/challenge`
+- Configure mobile proof with `HUMAN_PROOF_SECRET`, `HUMAN_PROOF_DIFFICULTY`, `HUMAN_PROOF_CHALLENGE_TTL_MS`, and `HUMAN_PROOF_MAX_NONCE`.
 - This folder is independent from `server/` and `new server folder/`.

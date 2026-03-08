@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
 import '../config.dart';
@@ -56,6 +57,10 @@ class UserProfile {
 }
 
 class ApiClient {
+  static const String _defaultHumanProofAction = 'checkout';
+  static const int _fallbackHumanProofDifficulty = 3;
+  static const int _fallbackHumanProofMaxNonce = 250000;
+
   ApiClient({http.Client? client, String? baseUrl})
     : _client = client ?? http.Client(),
       _baseUrl = _normalizeBase(baseUrl),
@@ -96,9 +101,7 @@ class ApiClient {
   }
 
   Map<String, String> _headers() {
-    final headers = <String, String>{
-      'Content-Type': 'application/json',
-    };
+    final headers = <String, String>{'Content-Type': 'application/json'};
     if (_token != null && _token!.isNotEmpty) {
       headers['Authorization'] = 'Bearer $_token';
     }
@@ -397,13 +400,19 @@ class ApiClient {
       throw ApiException('لا توجد عناصر في السلة');
     }
 
+    Map<String, dynamic>? humanProof;
+    if (_token == null || _token!.isEmpty) {
+      humanProof = await _buildHumanProof(action: _defaultHumanProofAction);
+    }
+
     final payload = {
       'customerName': customerName,
       'customerPhone': customerPhone,
       'address': address,
       if (note != null && note.isNotEmpty) 'note': note,
       'paymentMethod': 'cod',
-      'recaptchaAction': 'checkout',
+      'recaptchaAction': _defaultHumanProofAction,
+      if (humanProof != null) 'humanProof': humanProof,
       'items': items
           .map(
             (item) => {
@@ -414,7 +423,8 @@ class ApiClient {
                 'measure': item.product.variantMeasure,
               if (item.product.variantColor != null)
                 'color': item.product.variantColor,
-              if (item.product.variantSku != null) 'sku': item.product.variantSku,
+              if (item.product.variantSku != null)
+                'sku': item.product.variantSku,
               'quantity': item.quantity,
               'name': item.product.name,
             },
@@ -434,6 +444,79 @@ class ApiClient {
       return OrderSummary.fromJson(orderJson);
     }
     return null;
+  }
+
+  Future<Map<String, dynamic>> _buildHumanProof({
+    required String action,
+  }) async {
+    final response = await _client.post(
+      _uri('/human-proof/challenge'),
+      headers: _headers(),
+      body: jsonEncode({'action': action}),
+    );
+    final data = _decode(response);
+
+    final challengeToken = data['challengeToken']?.toString() ?? '';
+    if (challengeToken.isEmpty) {
+      throw ApiException('تعذر بدء التحقق الأمني للجلسة');
+    }
+
+    final difficulty = _coerceInt(
+      data['difficulty'],
+      fallback: _fallbackHumanProofDifficulty,
+      min: 1,
+      max: 8,
+    );
+    final maxNonce = _coerceInt(
+      data['maxNonce'],
+      fallback: _fallbackHumanProofMaxNonce,
+      min: 1000,
+      max: 5000000,
+    );
+
+    final nonce = _solveHumanProof(
+      challengeToken: challengeToken,
+      difficulty: difficulty,
+      maxNonce: maxNonce,
+    );
+
+    return {'challengeToken': challengeToken, 'nonce': nonce, 'action': action};
+  }
+
+  String _solveHumanProof({
+    required String challengeToken,
+    required int difficulty,
+    required int maxNonce,
+  }) {
+    final requiredPrefix = '0' * difficulty;
+    for (var nonce = 0; nonce <= maxNonce; nonce++) {
+      final nonceString = '$nonce';
+      final digest = sha256
+          .convert(utf8.encode('$challengeToken:$nonceString'))
+          .toString();
+      if (digest.startsWith(requiredPrefix)) {
+        return nonceString;
+      }
+    }
+    throw ApiException('تعذر إكمال التحقق الأمني. حاول مرة أخرى.');
+  }
+
+  int _coerceInt(
+    dynamic value, {
+    required int fallback,
+    required int min,
+    required int max,
+  }) {
+    final intValue = switch (value) {
+      int v => v,
+      num v => v.toInt(),
+      String v => int.tryParse(v) ?? fallback,
+      _ => fallback,
+    };
+
+    if (intValue < min) return min;
+    if (intValue > max) return max;
+    return intValue;
   }
 
   Future<List<VariantItem>> fetchVariants(String productId) async {
