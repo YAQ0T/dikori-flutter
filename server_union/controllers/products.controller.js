@@ -2,6 +2,7 @@
 const mongoose = require("mongoose");
 const Product = require("../models/Product");
 const Variant = require("../models/Variant");
+const { getFirestore } = require("../utils/firebaseAdmin");
 const {
   slugify,
   buildWantedTags,
@@ -236,6 +237,264 @@ function formatProducts(list = []) {
   return list.map((item) => formatProduct(item));
 }
 
+const FIRESTORE_PRODUCTS_READS_ENABLED =
+  String(process.env.USE_FIRESTORE_PRODUCTS_READS || "false").toLowerCase() ===
+  "true";
+const FIRESTORE_IN_QUERY_LIMIT = 30;
+const FIRESTORE_SUGGEST_CANDIDATE_LIMIT = Math.max(
+  30,
+  Math.min(
+    Number.parseInt(process.env.FIRESTORE_SUGGEST_CANDIDATE_LIMIT || "120", 10) || 120,
+    500
+  )
+);
+
+function priorityRankFromValue(priority) {
+  const p = String(priority || "").toUpperCase();
+  if (p === "A") return 1;
+  if (p === "B") return 2;
+  if (p === "C") return 3;
+  return 4;
+}
+
+function toTimestampMs(value) {
+  if (!value) return 0;
+  const date = value instanceof Date ? value : new Date(value);
+  const ts = date.getTime();
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+function normalizeFirestoreValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeFirestoreValue(item));
+  }
+  if (value && typeof value.toDate === "function") {
+    return value.toDate();
+  }
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const [key, nested] of Object.entries(value)) {
+      out[key] = normalizeFirestoreValue(nested);
+    }
+    return out;
+  }
+  return value;
+}
+
+function toFirestoreDoc(docSnap) {
+  const raw = normalizeFirestoreValue(docSnap.data() || {});
+  return {
+    ...raw,
+    _id: String(raw._id || docSnap.id),
+  };
+}
+
+function buildSearchParts(q) {
+  const term = String(q || "").trim();
+  if (!term) return [];
+
+  const quoted = term.match(/"([^"]+)"/g) || [];
+  const phrases = quoted
+    .map((p) => p.replace(/"/g, "").trim())
+    .filter(Boolean);
+  const remainder = term.replace(/"([^"]+)"/g, " ").trim();
+  const tokens = remainder.split(/\s+/).filter(Boolean);
+
+  return Array.from(new Set([...phrases, ...tokens]))
+    .map((part) => part.toLowerCase())
+    .filter(Boolean);
+}
+
+function collectSearchableTexts(product) {
+  const localizedName = ensureLocalizedObject(product?.name);
+  const localizedDescription = ensureLocalizedObject(product?.description);
+  return [
+    localizedName.ar,
+    localizedName.he,
+    localizedDescription.ar,
+    localizedDescription.he,
+  ]
+    .map((v) => String(v || "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function matchesSearchParts(product, parts = []) {
+  if (!parts.length) return true;
+  const searchable = collectSearchableTexts(product);
+  return parts.every((part) =>
+    searchable.some((fieldValue) => fieldValue.includes(part))
+  );
+}
+
+function includesWantedTags(variant, wantedTags = []) {
+  if (!wantedTags.length) return true;
+  const tags = Array.isArray(variant?.tags) ? variant.tags.map(String) : [];
+  return wantedTags.every((wanted) => tags.includes(wanted));
+}
+
+function getPreferredLocalizedName(product, locale = "ar") {
+  const localizedName = ensureLocalizedObject(product?.name);
+  if (locale === "he") {
+    return String(localizedName.he || localizedName.ar || "").trim();
+  }
+  return String(localizedName.ar || localizedName.he || "").trim();
+}
+
+function compareProductsBySort(a, b, { sort = "new", locale = "ar" } = {}) {
+  if (sort === "priceAsc") {
+    return (
+      Number(a.minPrice || 0) - Number(b.minPrice || 0) ||
+      toTimestampMs(b.createdAt) - toTimestampMs(a.createdAt)
+    );
+  }
+  if (sort === "priceDesc") {
+    return (
+      Number(b.minPrice || 0) - Number(a.minPrice || 0) ||
+      toTimestampMs(b.createdAt) - toTimestampMs(a.createdAt)
+    );
+  }
+  if (sort === "nameAsc" || sort === "nameDesc") {
+    const localeCode = locale === "he" ? "he" : "ar";
+    const first = getPreferredLocalizedName(a, localeCode);
+    const second = getPreferredLocalizedName(b, localeCode);
+    const dir = sort === "nameAsc" ? 1 : -1;
+    return (
+      dir * first.localeCompare(second, localeCode, { sensitivity: "base" }) ||
+      toTimestampMs(b.createdAt) - toTimestampMs(a.createdAt)
+    );
+  }
+
+  return (
+    priorityRankFromValue(a.priority) - priorityRankFromValue(b.priority) ||
+    toTimestampMs(b.createdAt) - toTimestampMs(a.createdAt)
+  );
+}
+
+function buildFirestoreProductsRef({
+  mainCategory,
+  subCategory,
+  ownershipType,
+  includeHidden = false,
+}) {
+  let ref = getFirestore().collection("products");
+  if (ownershipType) {
+    ref = ref.where("ownershipType", "==", String(ownershipType));
+  }
+  if (mainCategory) {
+    ref = ref.where("mainCategory", "==", String(mainCategory));
+  }
+  if (subCategory) {
+    ref = ref.where("subCategory", "==", String(subCategory));
+  }
+  if (!includeHidden) {
+    ref = ref.where("isVisible", "==", true);
+  }
+  return ref;
+}
+
+async function queryFirestoreProducts({
+  mainCategory,
+  subCategory,
+  ownershipType,
+  includeHidden = false,
+}) {
+  const ref = buildFirestoreProductsRef({
+    mainCategory,
+    subCategory,
+    ownershipType,
+    includeHidden,
+  });
+  const snapshot = await ref.get();
+  return snapshot.docs.map((doc) => toFirestoreDoc(doc));
+}
+
+function resolveFirestoreSortOrders(sort, locale = "ar") {
+  if (sort === "nameAsc") {
+    return [{ field: locale === "he" ? "name.he" : "name.ar", direction: "asc" }];
+  }
+  if (sort === "nameDesc") {
+    return [{ field: locale === "he" ? "name.he" : "name.ar", direction: "desc" }];
+  }
+  // default: priority then newest first
+  return [
+    { field: "priority", direction: "asc" },
+    { field: "createdAt", direction: "desc" },
+  ];
+}
+
+function shouldUseFastFirestoreProductsPath({
+  wantedTags = [],
+  maxPrice,
+  sort = "new",
+  hasSearch = false,
+}) {
+  if (hasSearch) return false;
+  if (Array.isArray(wantedTags) && wantedTags.length > 0) return false;
+  if (typeof maxPrice !== "undefined" && maxPrice !== null && maxPrice !== "") {
+    return false;
+  }
+  if (sort === "nameAsc" || sort === "nameDesc") return false;
+  if (sort === "priceAsc" || sort === "priceDesc") return false;
+  return true;
+}
+
+function chunkArray(values = [], size = 30) {
+  const chunks = [];
+  for (let i = 0; i < values.length; i += size) {
+    chunks.push(values.slice(i, i + size));
+  }
+  return chunks;
+}
+
+async function loadFirestoreVariantsMap(productIds = []) {
+  const ids = Array.from(
+    new Set((productIds || []).map((id) => String(id || "")).filter(Boolean))
+  );
+  const result = new Map(ids.map((id) => [id, []]));
+  if (!ids.length) return result;
+
+  const db = getFirestore();
+  const chunks = chunkArray(ids, FIRESTORE_IN_QUERY_LIMIT);
+  for (const chunk of chunks) {
+    const snap = await db
+      .collection("variants")
+      .where("productId", "in", chunk)
+      .get();
+    for (const doc of snap.docs) {
+      const data = toFirestoreDoc(doc);
+      const productId = String(data.productId || data.product || "");
+      if (!productId) continue;
+      if (!result.has(productId)) result.set(productId, []);
+      result.get(productId).push({
+        ...data,
+        product: productId,
+      });
+    }
+  }
+
+  return result;
+}
+
+async function getFirestoreProductById(id) {
+  const snap = await getFirestore().collection("products").doc(String(id)).get();
+  if (!snap.exists) return null;
+  return toFirestoreDoc(snap);
+}
+
+async function getFirestoreVariantsByProductId(productId) {
+  const snap = await getFirestore()
+    .collection("variants")
+    .where("productId", "==", String(productId))
+    .get();
+  return snap.docs.map((doc) => {
+    const data = toFirestoreDoc(doc);
+    return {
+      ...data,
+      product: String(data.productId || data.product || productId),
+    };
+  });
+}
+
 const ProductsController = {
   /* =========================
    * CREATE
@@ -278,6 +537,153 @@ const ProductsController = {
         req.query,
         canUseOwnership
       );
+
+      if (FIRESTORE_PRODUCTS_READS_ENABLED) {
+        const { pageNum, limitNum, skip } = parsePagination(req.query);
+        const searchParts = buildSearchParts(q);
+        const useFastPath = shouldUseFastFirestoreProductsPath({
+          wantedTags,
+          maxPrice,
+          sort,
+          hasSearch: searchParts.length > 0,
+        });
+
+        if (useFastPath) {
+          const baseRef = buildFirestoreProductsRef({
+            mainCategory,
+            subCategory,
+            ownershipType: ownershipFilter.ownershipType,
+            includeHidden,
+          });
+
+          let pagedRef = baseRef;
+          const sortOrders = resolveFirestoreSortOrders(sort, locale);
+          for (const order of sortOrders) {
+            pagedRef = pagedRef.orderBy(order.field, order.direction);
+          }
+          pagedRef = pagedRef.offset(skip).limit(limitNum);
+
+          const countPromise =
+            typeof baseRef.count === "function"
+              ? baseRef.count().get()
+              : baseRef.get().then((snap) => ({
+                  data: () => ({ count: snap.size || 0 }),
+                }));
+
+          const [countSnap, pagedSnap] = await Promise.all([
+            countPromise,
+            pagedRef.get(),
+          ]);
+
+          const total = Number(countSnap?.data?.()?.count || 0);
+          const totalPages = Math.ceil(total / limitNum);
+          const pagedProducts = pagedSnap.docs.map((doc) => toFirestoreDoc(doc));
+          const variantsMap = await loadFirestoreVariantsMap(
+            pagedProducts.map((product) => product._id)
+          );
+
+          const now = new Date();
+          const withStats = pagedProducts.map((product) => {
+            const variants = variantsMap.get(String(product._id)) || [];
+            let minPrice = null;
+            let totalStock = 0;
+
+            for (const variant of variants) {
+              const stock = Number(variant?.stock?.inStock);
+              if (Number.isFinite(stock)) {
+                totalStock += stock;
+              }
+
+              const displayPrice = computeVariantDisplayPrice(variant, now);
+              if (displayPrice.final === null) continue;
+              if (minPrice === null || displayPrice.final < minPrice) {
+                minPrice = displayPrice.final;
+              }
+            }
+
+            return {
+              ...product,
+              minPrice: minPrice === null ? 0 : minPrice,
+              totalStock,
+            };
+          });
+
+          return res.json({
+            items: formatProducts(withStats),
+            total,
+            totalPages,
+            page: pageNum,
+            limit: limitNum,
+          });
+        }
+
+        const products = await queryFirestoreProducts({
+          mainCategory,
+          subCategory,
+          ownershipType: ownershipFilter.ownershipType,
+          includeHidden,
+        });
+
+        const visibleFiltered = products.filter((product) => {
+          return matchesSearchParts(product, searchParts);
+        });
+
+        const variantsMap = await loadFirestoreVariantsMap(
+          visibleFiltered.map((product) => product._id)
+        );
+
+        const now = new Date();
+        const withStats = [];
+        for (const product of visibleFiltered) {
+          const variants = variantsMap.get(String(product._id)) || [];
+          let minPrice = null;
+          let totalStock = 0;
+          let hasTagMatch = wantedTags.length === 0;
+
+          for (const variant of variants) {
+            if (!includesWantedTags(variant, wantedTags)) continue;
+            hasTagMatch = true;
+
+            const stock = Number(variant?.stock?.inStock);
+            if (Number.isFinite(stock)) {
+              totalStock += stock;
+            }
+
+            const displayPrice = computeVariantDisplayPrice(variant, now);
+            if (displayPrice.final === null) continue;
+            if (minPrice === null || displayPrice.final < minPrice) {
+              minPrice = displayPrice.final;
+            }
+          }
+
+          if (!hasTagMatch) continue;
+
+          const normalizedPrice = minPrice === null ? 0 : minPrice;
+          if (maxPrice && normalizedPrice > Number(maxPrice)) {
+            continue;
+          }
+
+          withStats.push({
+            ...product,
+            minPrice: normalizedPrice,
+            totalStock,
+          });
+        }
+
+        withStats.sort((a, b) => compareProductsBySort(a, b, { sort, locale }));
+
+        const paged = withStats.slice(skip, skip + limitNum);
+        const total = withStats.length;
+        const totalPages = Math.ceil(total / limitNum);
+
+        return res.json({
+          items: formatProducts(paged),
+          total,
+          totalPages,
+          page: pageNum,
+          limit: limitNum,
+        });
+      }
 
       // فلاتر البحث الأساسية
       const $match = { ...ownershipFilter };
@@ -536,6 +942,59 @@ const ProductsController = {
         canUseOwnership
       );
 
+      if (FIRESTORE_PRODUCTS_READS_ENABLED) {
+        const products = await queryFirestoreProducts({
+          mainCategory,
+          subCategory,
+          ownershipType: ownershipFilter.ownershipType,
+          includeHidden,
+        });
+        const searchParts = buildSearchParts(q);
+
+        const visibleFiltered = products.filter((product) => {
+          if (!includeHidden && product.isVisible === false) return false;
+          return matchesSearchParts(product, searchParts);
+        });
+
+        const variantsMap = await loadFirestoreVariantsMap(
+          visibleFiltered.map((product) => product._id)
+        );
+
+        const colorSlugs = new Set();
+        const measureSlugs = new Set();
+
+        for (const variants of variantsMap.values()) {
+          for (const variant of variants) {
+            const tags = Array.isArray(variant?.tags)
+              ? variant.tags.map(String)
+              : [];
+            for (const tag of tags) {
+              if (tag.startsWith("color:")) {
+                colorSlugs.add(tag.slice(6));
+              } else if (tag.startsWith("measure:")) {
+                measureSlugs.add(tag.slice(8));
+              }
+            }
+          }
+        }
+
+        const toName = (slug) =>
+          String(slug || "")
+            .replace(/[-_]+/g, " ")
+            .trim();
+
+        return res.json({
+          colors: Array.from(colorSlugs).map((slug) => ({
+            slug,
+            name: toName(slug),
+          })),
+          measures: Array.from(measureSlugs).map((slug) => ({
+            slug,
+            name: toName(slug),
+          })),
+        });
+      }
+
       const $match = { ...ownershipFilter };
       applyVisibilityFilter($match, includeHidden);
       if (mainCategory) $match.mainCategory = String(mainCategory);
@@ -634,6 +1093,59 @@ const ProductsController = {
         canUseOwnership
       );
 
+      if (FIRESTORE_PRODUCTS_READS_ENABLED) {
+        const searchParts = buildSearchParts(q);
+        const baseRef = buildFirestoreProductsRef({
+          ownershipType: ownershipFilter.ownershipType,
+          includeHidden,
+        });
+        const productsSnap = await baseRef
+          .orderBy("priority", "asc")
+          .orderBy("createdAt", "desc")
+          .limit(FIRESTORE_SUGGEST_CANDIDATE_LIMIT)
+          .get();
+        const products = productsSnap.docs.map((doc) => toFirestoreDoc(doc));
+
+        const filtered = products.filter((product) => {
+          return matchesSearchParts(product, searchParts);
+        });
+
+        filtered.sort((a, b) => compareProductsBySort(a, b, { sort: "new" }));
+        const items = filtered.slice(0, limitNum);
+
+        const variantsMap = await loadFirestoreVariantsMap(
+          items.map((item) => item._id)
+        );
+        const now = new Date();
+        const minPriceByProduct = new Map();
+
+        for (const [productId, variants] of variantsMap.entries()) {
+          for (const variant of variants) {
+            const price = computeVariantDisplayPrice(variant, now);
+            if (price.final === null) continue;
+
+            const current = minPriceByProduct.get(productId);
+            if (!current || price.final < current.price) {
+              minPriceByProduct.set(productId, {
+                price: price.final,
+                comparePrice: price.compare,
+              });
+            }
+          }
+        }
+
+        return res.json({
+          items: (items || []).map((p) => ({
+            _id: p._id,
+            name: mapLocalizedForResponse(p.name),
+            image: Array.isArray(p.images) ? p.images[0] || null : null,
+            price: minPriceByProduct.get(String(p._id))?.price ?? null,
+            comparePrice:
+              minPriceByProduct.get(String(p._id))?.comparePrice ?? null,
+          })),
+        });
+      }
+
       const searchMatch = buildSearchMatch(q);
       const filter = { ...ownershipFilter, ...(searchMatch || {}) };
       applyVisibilityFilter(filter, includeHidden);
@@ -707,6 +1219,47 @@ const ProductsController = {
         canUseOwnership
       );
 
+      if (FIRESTORE_PRODUCTS_READS_ENABLED) {
+        const { limitNum, skip } = parsePagination({
+          page: req.query.page || 1,
+          limit: req.query.limit || 50,
+        });
+        const searchParts = buildSearchParts(q);
+
+        if (!searchParts.length) {
+          const pagedSnap = await buildFirestoreProductsRef({
+            mainCategory,
+            subCategory,
+            ownershipType: ownershipFilter.ownershipType,
+            includeHidden,
+          })
+            .orderBy("priority", "asc")
+            .orderBy("createdAt", "desc")
+            .offset(skip)
+            .limit(limitNum)
+            .get();
+          const items = pagedSnap.docs.map((doc) => toFirestoreDoc(doc));
+          return res.status(200).json(formatProducts(items));
+        }
+
+        const products = await queryFirestoreProducts({
+          mainCategory,
+          subCategory,
+          ownershipType: ownershipFilter.ownershipType,
+          includeHidden,
+        });
+
+        const filtered = products.filter((product) =>
+          matchesSearchParts(product, searchParts)
+        );
+
+        filtered.sort((a, b) => compareProductsBySort(a, b, { sort: "new" }));
+
+        return res.status(200).json(
+          formatProducts(filtered.slice(skip, skip + limitNum))
+        );
+      }
+
       const filter = { ...ownershipFilter };
       applyVisibilityFilter(filter, includeHidden);
       if (mainCategory) filter.mainCategory = String(mainCategory);
@@ -739,6 +1292,25 @@ const ProductsController = {
       const withVariants = req.query.withVariants === "1";
       const { id } = req.params;
       const includeHidden = shouldIncludeHidden(req);
+
+      if (!id || !String(id).trim()) {
+        return res.status(400).json({ error: "معرّف غير صالح" });
+      }
+
+      if (FIRESTORE_PRODUCTS_READS_ENABLED) {
+        const product = await getFirestoreProductById(id);
+        if (!product)
+          return res.status(404).json({ message: "المنتج غير موجود" });
+        if (!includeHidden && product.isVisible === false) {
+          return res.status(404).json({ message: "المنتج غير موجود" });
+        }
+
+        const normalizedProduct = formatProduct(product);
+        if (!withVariants) return res.json(normalizedProduct);
+
+        const variants = await getFirestoreVariantsByProductId(product._id);
+        return res.json({ ...normalizedProduct, variants });
+      }
 
       if (!mongoose.isValidObjectId(id)) {
         return res.status(400).json({ error: "معرّف غير صالح" });

@@ -103,17 +103,35 @@ router.get("/my", verifyToken, async (req, res) => {
   }
 
   try {
-    const notifications = await Notification.find({
-      $or: [
-        { target: "all" },
-        { target: "user", user: userId },
-      ],
-    })
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .lean();
+    const [globalNotifications, personalNotifications] = await Promise.all([
+      Notification.find({ target: "all" })
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .select("_id title message target createdAt readBy")
+        .lean(),
+      Notification.find({ target: "user", user: userId })
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .select("_id title message target createdAt readBy")
+        .lean(),
+    ]);
 
-    const mapped = notifications.map((n) => ({
+    const merged = [...(globalNotifications || []), ...(personalNotifications || [])];
+    const deduped = Array.from(
+      merged.reduce((acc, item) => {
+        if (!item?._id) return acc;
+        const key = String(item._id);
+        if (!acc.has(key)) acc.set(key, item);
+        return acc;
+      }, new Map()).values()
+    )
+      .sort(
+        (a, b) =>
+          new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime()
+      )
+      .slice(0, 5);
+
+    const mapped = deduped.map((n) => ({
       _id: n._id,
       title: n.title,
       message: n.message,
@@ -147,34 +165,41 @@ router.patch(
   }
 
   try {
-    const notification = await Notification.findOneAndUpdate(
-      {
-        _id: id,
-        $or: [
-          { target: "all" },
-          { target: "user", user: userId },
-        ],
-      },
-      { $addToSet: { readBy: userId } },
-      { new: true }
-    )
-      .select("_id title message target createdAt readBy")
+    const existing = await Notification.findById(id)
+      .select("_id title message target user createdAt readBy")
       .lean();
 
-    if (!notification) {
+    if (!existing) {
       return res.status(404).json({ message: "الإشعار غير موجود" });
     }
 
-    const isRead = Array.isArray(notification.readBy)
-      ? notification.readBy.some((reader) => String(reader) === String(userId))
-      : false;
+    if (
+      existing.target === "user" &&
+      String(existing.user || "") !== String(userId)
+    ) {
+      return res.status(404).json({ message: "الإشعار غير موجود" });
+    }
+
+    await Notification.updateOne(
+      { _id: id },
+      { $addToSet: { readBy: userId } }
+    );
+
+    const readBy = Array.isArray(existing.readBy)
+      ? existing.readBy.map((reader) => String(reader))
+      : [];
+    if (!readBy.includes(String(userId))) {
+      readBy.push(String(userId));
+    }
+
+    const isRead = readBy.includes(String(userId));
 
     return res.json({
-      _id: notification._id,
-      title: notification.title,
-      message: notification.message,
-      target: notification.target,
-      createdAt: notification.createdAt,
+      _id: existing._id,
+      title: existing.title,
+      message: existing.message,
+      target: existing.target,
+      createdAt: existing.createdAt,
       isRead,
     });
   } catch (err) {

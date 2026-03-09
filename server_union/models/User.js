@@ -1,111 +1,119 @@
-const mongoose = require("mongoose");
 const crypto = require("crypto");
+const {
+  createFirestoreModel,
+} = require("../utils/firestoreModel");
 
-/**
- * ملاحظات مهمة:
- * - لا تحفظ email=null أو email="" إطلاقًا. سنحولها إلى undefined في hook قبل الحفظ.
- * - نستخدم Partial Unique Index على email ليكون unique فقط عندما تكون email من نوع String.
- * - phone فريد وإجباري.
- */
+function normalizeEmail(email) {
+  if (!email) return undefined;
+  const value = String(email).trim().toLowerCase();
+  return value || undefined;
+}
 
-const UserSchema = new mongoose.Schema(
-  {
-    name: { type: String, trim: true },
-
-    // ✅ الجوال إجباري + فريد
-    phone: { type: String, required: true, unique: true, index: true },
-
-    // ✅ البريد اختياري + فريد بشكل جزئي (انظر الفهرس بالأسفل)
-    email: { type: String, trim: true, lowercase: true, index: true },
-
-    // ✅ كلمة المرور
-    password: { type: String, required: true },
-
-    // معلومات عامة
-    role: { type: String, enum: ["user", "admin"], default: "user" },
+const User = createFirestoreModel({
+  modelName: "User",
+  collectionName: "users",
+  defaults: () => ({
+    name: "",
+    phone: "",
+    email: undefined,
+    password: "",
+    authProvider: "local",
+    firebaseUid: undefined,
+    role: "user",
     address: {
-      city: String,
-      street: String,
-      notes: String,
-      lat: Number,
-      lng: Number,
+      city: "",
+      street: "",
+      notes: "",
+      lat: null,
+      lng: null,
     },
+    phoneVerified: false,
+    phoneVerificationCodeHash: undefined,
+    phoneVerificationExpires: undefined,
+    phoneVerificationAttempts: 0,
+    phoneVerificationResends: 0,
+    resetPasswordCodeHash: undefined,
+    resetPasswordExpires: undefined,
+    resetPasswordAttempts: 0,
+  }),
+  beforeSave: (doc) => {
+    const out = { ...doc };
+    out.phone = String(out.phone || "").trim();
+    out.name = String(out.name || "").trim();
+    out.role = String(out.role || "user").trim() || "user";
+    out.authProvider = String(out.authProvider || "local")
+      .trim()
+      .toLowerCase();
+    if (!["local", "google", "facebook", "apple"].includes(out.authProvider)) {
+      out.authProvider = "local";
+    }
 
-    // ✅ توثيق الجوال بالـ OTP (حاليًا مستخدم للتوثيق العام)
-    phoneVerified: { type: Boolean, default: false },
-    phoneVerificationCodeHash: { type: String },
-    phoneVerificationExpires: { type: Date },
-    phoneVerificationAttempts: { type: Number, default: 0 },
-    phoneVerificationResends: { type: Number, default: 0 },
+    const normalizedEmail = normalizeEmail(out.email);
+    out.email = normalizedEmail;
+    const normalizedFirebaseUid = out.firebaseUid
+      ? String(out.firebaseUid).trim()
+      : "";
+    out.firebaseUid = normalizedFirebaseUid || undefined;
 
-    // ✅ (الإضافة الجديدة) إعادة تعيين كلمة المرور بالـ OTP
-    // يتم تعيينها في routes/auth.js عبر setResetOTPOnUser / checkResetOTPOnUser
-    resetPasswordCodeHash: { type: String },
-    resetPasswordExpires: { type: Date },
-    resetPasswordAttempts: { type: Number, default: 0 },
+    if (!out.email || out.email === "null" || out.email === "undefined") {
+      delete out.email;
+    }
+
+    if (!out.phone) {
+      delete out.phone;
+    }
+    if (!out.phone && !out.email) {
+      throw new Error("phone or email is required");
+    }
+
+    if (out.authProvider === "local" && !out.password) {
+      throw new Error("password is required for local auth");
+    }
+
+    if (out.authProvider !== "local" && !out.password) {
+      delete out.password;
+    }
+
+    return out;
   },
-  { timestamps: true }
-);
+  instanceMethods: {
+    setPhoneOTP(code, ttlMinutes = 10) {
+      const hash = crypto
+        .createHash("sha256")
+        .update(String(code))
+        .digest("hex");
+      this.phoneVerificationCodeHash = hash;
+      this.phoneVerificationExpires = new Date(
+        Date.now() + Number(ttlMinutes || 10) * 60 * 1000
+      );
+      this.phoneVerificationAttempts = 0;
+    },
+    checkPhoneOTP(code) {
+      if (!this.phoneVerificationCodeHash || !this.phoneVerificationExpires) {
+        return false;
+      }
 
-/* =========================
-   Hooks للتنظيف قبل الحفظ
-========================= */
-UserSchema.pre("save", function (next) {
-  // لا نسمح بـ null/"" في email، نحولها إلى undefined لتُزال من الوثيقة
-  if (!this.email || this.email === "null" || this.email === "undefined") {
-    this.email = undefined;
-  }
-  next();
+      const expires =
+        this.phoneVerificationExpires instanceof Date
+          ? this.phoneVerificationExpires
+          : new Date(this.phoneVerificationExpires);
+      if (expires.getTime() < Date.now()) return false;
+
+      const incoming = crypto
+        .createHash("sha256")
+        .update(String(code))
+        .digest("hex");
+
+      try {
+        return crypto.timingSafeEqual(
+          Buffer.from(incoming),
+          Buffer.from(String(this.phoneVerificationCodeHash))
+        );
+      } catch {
+        return false;
+      }
+    },
+  },
 });
 
-/* =========================
-   فهارس (Indexes)
-========================= */
-
-/**
- * ✅ فريد جزئي على email:
- *  - يطبّق الفريد فقط عندما تكون email من نوع String
- *  - يسمح بتعدد المستندات التي لا تحتوي على الحقل أصلًا
- *  - يمنع تكرار نفس البريد عندما يكون موجودًا
- */
-UserSchema.index(
-  { email: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { email: { $type: "string" } },
-    name: "uniq_email_partial",
-  }
-);
-
-// phone فريد (موجود أيضًا على مستوى الحقل، نضيف اسم للمؤشر للوضوح)
-UserSchema.index({ phone: 1 }, { unique: true, name: "uniq_phone" });
-
-/* =========================
-   OTP Helpers (للتحقق عبر SMS)
-========================= */
-UserSchema.methods.setPhoneOTP = function setPhoneOTP(code, ttlMinutes = 10) {
-  const hash = crypto.createHash("sha256").update(String(code)).digest("hex");
-  this.phoneVerificationCodeHash = hash;
-  this.phoneVerificationExpires = new Date(Date.now() + ttlMinutes * 60 * 1000);
-  this.phoneVerificationAttempts = 0;
-};
-
-UserSchema.methods.checkPhoneOTP = function checkPhoneOTP(code) {
-  if (!this.phoneVerificationCodeHash || !this.phoneVerificationExpires)
-    return false;
-  if (this.phoneVerificationExpires < new Date()) return false;
-  const incoming = crypto
-    .createHash("sha256")
-    .update(String(code))
-    .digest("hex");
-  try {
-    return crypto.timingSafeEqual(
-      Buffer.from(incoming),
-      Buffer.from(this.phoneVerificationCodeHash)
-    );
-  } catch {
-    return false;
-  }
-};
-
-module.exports = mongoose.model("User", UserSchema);
+module.exports = User;

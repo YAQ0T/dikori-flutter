@@ -1,6 +1,5 @@
 const express = require("express");
 
-// عدّل المسارات حسب مشروعك إذا لزم
 const Product = require("../models/Product");
 const Variant = require("../models/Variant");
 const { mapLocalizedForResponse } = require("../utils/localized");
@@ -17,11 +16,14 @@ function isDiscountActive(discount = {}) {
   return true;
 }
 
-/**
- * GET /api/products/recent-updates
- * - يسترجع المنتجات التي تم تحديثها (product أو variant) خلال X أيام
- * - يدعم: mainCategory, subCategory, q, ownership, tags, page, limit, days
- */
+function chunkArray(values = [], size = 30) {
+  const out = [];
+  for (let i = 0; i < values.length; i += size) {
+    out.push(values.slice(i, i + size));
+  }
+  return out;
+}
+
 router.get("/recent-updates", verifyTokenOptional, async (req, res) => {
   try {
     const {
@@ -41,132 +43,221 @@ router.get("/recent-updates", verifyTokenOptional, async (req, res) => {
     const daysNum = Math.max(1, parseInt(days, 10) || 14);
 
     const sinceDate = new Date(Date.now() - daysNum * 24 * 60 * 60 * 1000);
-
-    // Build product query
-    const productMatch = {
-      $or: [
-        { updatedAt: { $gte: sinceDate } },
-        { createdAt: { $gte: sinceDate } },
-      ],
-    };
     const canViewHidden = req.user?.role === "admin" || req.user?.role === "dealer";
+    const baseProductFilter = {};
     if (!canViewHidden) {
-      productMatch.isVisible = { $ne: false };
+      baseProductFilter.isVisible = { $ne: false };
     }
-    if (q) {
-      productMatch.$text = { $search: String(q) };
+    if (mainCategory) {
+      baseProductFilter.mainCategory = String(mainCategory);
     }
-    if (mainCategory) productMatch.mainCategory = String(mainCategory);
-    if (subCategory) productMatch.subCategory = String(subCategory);
+    if (subCategory) {
+      baseProductFilter.subCategory = String(subCategory);
+    }
     if (ownership && ["ours", "local"].includes(String(ownership))) {
-      // FIX: use schema field ownershipType
-      productMatch.ownershipType = ownership;
-    }
-    if (tags) {
-      const arr =
-        typeof tags === "string"
-          ? tags
-              .split(",")
-              .map((t) => t.trim())
-              .filter(Boolean)
-          : [];
-      if (arr.length) productMatch.tags = { $in: arr };
+      baseProductFilter.ownershipType = String(ownership);
     }
 
-    const agg = [
-      { $match: productMatch },
-      {
-        $lookup: {
-          from: "variants",
-          localField: "_id",
-          foreignField: "productId",
-          as: "variants",
-        },
-      },
-      {
-        $addFields: {
-          anyVariantUpdatedRecently: {
-            $gt: [
-              {
-                $size: {
-                  $filter: {
-                    input: "$variants",
-                    as: "v",
-                    cond: {
-                      $or: [
-                        { $gte: ["$$v.updatedAt", sinceDate] },
-                        { $gte: ["$$v.createdAt", sinceDate] },
-                      ],
-                    },
-                  },
-                },
-              },
-              0,
-            ],
-          },
-        },
-      },
-      {
-        $match: {
+    const productProjection =
+      "_id name description images mainCategory subCategory ownershipType tags isVisible updatedAt createdAt";
+
+    const [recentlyUpdatedProducts, recentlyCreatedProducts, recentVariants] =
+      await Promise.all([
+        Product.find({
+          ...baseProductFilter,
+          updatedAt: { $gte: sinceDate },
+        })
+          .select(productProjection)
+          .lean(),
+        Product.find({
+          ...baseProductFilter,
+          createdAt: { $gte: sinceDate },
+        })
+          .select(productProjection)
+          .lean(),
+        Variant.find({
           $or: [
-            { anyVariantUpdatedRecently: true },
             { updatedAt: { $gte: sinceDate } },
             { createdAt: { $gte: sinceDate } },
           ],
-        },
-      },
-      { $sort: { updatedAt: -1, createdAt: -1 } },
-      {
-        $facet: {
-          meta: [{ $count: "total" }],
-          data: [{ $skip: (p - 1) * l }, { $limit: l }],
-        },
-      },
-    ];
+        })
+          .select(
+            "_id product productId price tags updatedAt createdAt stock measure color"
+          )
+          .lean(),
+      ]);
 
-    const result = await Product.aggregate(agg);
-    const total = result?.[0]?.meta?.[0]?.total || 0;
-    const totalPages = Math.ceil(total / l);
-
-    // shape output (calculate final price from variant discount/price)
-    const shaped = (result?.[0]?.data || []).map((doc) => {
-      const v = Array.isArray(doc.variants) ? doc.variants[0] : null;
-      let finalPrice = v?.price?.amount ?? null;
-      if (v && v.discount && isDiscountActive(v.discount)) {
-        finalPrice =
-          v.discount.type === "percent"
-            ? Math.max(
-                0,
-                Math.round((v.price.amount * (100 - v.discount.value)) / 100)
-              )
-            : Math.max(0, v.price.amount - v.discount.value);
+    const productsById = new Map();
+    const markProducts = (list = []) => {
+      for (const item of list || []) {
+        const id = String(item?._id || "").trim();
+        if (!id) continue;
+        if (!productsById.has(id)) {
+          productsById.set(id, item);
+        }
       }
-      return {
-        _id: doc._id,
-        name: mapLocalizedForResponse(doc.name),
-        images: doc.images || [],
-        mainCategory: doc.mainCategory,
-        subCategory: doc.subCategory,
-        ownershipType: doc.ownershipType || null,
-        tags: doc.tags || [],
-        updatedAt: doc.updatedAt,
-        createdAt: doc.createdAt,
-        firstVariant: v
-          ? {
-              _id: v._id,
-              price: v.price || null,
-              discount: v.discount || null,
-              finalPrice,
-            }
-          : null,
-      };
+    };
+    markProducts(recentlyUpdatedProducts);
+    markProducts(recentlyCreatedProducts);
+
+    const recentVariantProductIds = Array.from(
+      new Set(
+        (recentVariants || [])
+          .map((variant) =>
+            String(variant?.productId || variant?.product || "").trim()
+          )
+          .filter(Boolean)
+      )
+    );
+
+    const missingProductIds = recentVariantProductIds.filter(
+      (id) => !productsById.has(id)
+    );
+    for (const chunk of chunkArray(missingProductIds, 30)) {
+      const chunkProducts = await Product.find({
+        ...baseProductFilter,
+        _id: { $in: chunk },
+      })
+        .select(productProjection)
+        .lean();
+      markProducts(chunkProducts);
+    }
+
+    const products = Array.from(productsById.values());
+    const productIds = products.map((product) => String(product?._id || "")).filter(Boolean);
+    const variantsByProductId = new Map(productIds.map((id) => [id, []]));
+    for (const chunk of chunkArray(productIds, 30)) {
+      const chunkVariants = await Variant.find({ product: { $in: chunk } })
+        .select("_id product productId price tags updatedAt createdAt stock measure color")
+        .lean();
+      for (const variant of chunkVariants || []) {
+        const productId = String(variant?.productId || variant?.product || "").trim();
+        if (!productId) continue;
+        if (!variantsByProductId.has(productId)) {
+          variantsByProductId.set(productId, []);
+        }
+        variantsByProductId.get(productId).push(variant);
+      }
+    }
+
+    const recentVariantProductSet = new Set(recentVariantProductIds);
+
+    const terms = String(q || "")
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+    const wantedTags =
+      typeof tags === "string"
+        ? tags
+            .split(",")
+            .map((t) => t.trim().toLowerCase())
+            .filter(Boolean)
+        : [];
+
+    const includesSearchTerms = (doc) => {
+      if (!terms.length) return true;
+      const text = [
+        doc?.name?.ar,
+        doc?.name?.he,
+        doc?.description?.ar,
+        doc?.description?.he,
+      ]
+        .map((v) => String(v || "").toLowerCase())
+        .join(" ");
+      return terms.every((term) => text.includes(term));
+    };
+
+    const hasTagMatch = (doc) => {
+      if (!wantedTags.length) return true;
+      const docTags = Array.isArray(doc?.tags)
+        ? doc.tags.map((v) => String(v || "").toLowerCase())
+        : [];
+      return wantedTags.some((tag) => docTags.includes(tag));
+    };
+
+    const shaped = [];
+    for (const product of products || []) {
+      if (!includesSearchTerms(product)) continue;
+      if (!hasTagMatch(product)) continue;
+
+      const relatedVariants =
+        variantsByProductId.get(String(product?._id || "")) || [];
+
+      const productUpdatedAt = product?.updatedAt ? new Date(product.updatedAt) : null;
+      const productCreatedAt = product?.createdAt ? new Date(product.createdAt) : null;
+      const productRecent =
+        (productUpdatedAt && productUpdatedAt >= sinceDate) ||
+        (productCreatedAt && productCreatedAt >= sinceDate);
+
+      const variantRecent = recentVariantProductSet.has(
+        String(product?._id || "")
+      );
+
+      if (!productRecent && !variantRecent) continue;
+
+      let firstVariant = null;
+      if (relatedVariants.length) {
+        const [variant] = [...relatedVariants].sort((a, b) => {
+          const aTs = new Date(a?.updatedAt || a?.createdAt || 0).getTime();
+          const bTs = new Date(b?.updatedAt || b?.createdAt || 0).getTime();
+          return bTs - aTs;
+        });
+        const discount = variant?.price?.discount || {};
+        let finalPrice = variant?.price?.amount ?? null;
+        if (variant && isDiscountActive(discount)) {
+          finalPrice =
+            discount.type === "percent"
+              ? Math.max(
+                  0,
+                  Math.round(
+                    (Number(variant?.price?.amount || 0) *
+                      (100 - Number(discount.value || 0))) /
+                      100
+                  )
+                )
+              : Math.max(
+                  0,
+                  Number(variant?.price?.amount || 0) - Number(discount.value || 0)
+                );
+        }
+        firstVariant = {
+          _id: variant?._id || null,
+          price: variant?.price || null,
+          discount: discount || null,
+          finalPrice,
+        };
+      }
+
+      shaped.push({
+        _id: product?._id,
+        name: mapLocalizedForResponse(product?.name),
+        images: Array.isArray(product?.images) ? product.images : [],
+        mainCategory: product?.mainCategory || "",
+        subCategory: product?.subCategory || "",
+        ownershipType: product?.ownershipType || null,
+        tags: Array.isArray(product?.tags) ? product.tags : [],
+        updatedAt: product?.updatedAt || null,
+        createdAt: product?.createdAt || null,
+        firstVariant,
+      });
+    }
+
+    shaped.sort((a, b) => {
+      const aTs = new Date(a.updatedAt || a.createdAt || 0).getTime();
+      const bTs = new Date(b.updatedAt || b.createdAt || 0).getTime();
+      return bTs - aTs;
     });
 
+    const total = shaped.length;
+    const totalPages = Math.ceil(total / l);
+    const paged = shaped.slice((p - 1) * l, (p - 1) * l + l);
+
     // threshold (min final price) optional filter
-    let filtered = shaped;
+    let filtered = paged;
     const th = Number(threshold);
     if (!Number.isNaN(th)) {
-      filtered = shaped.filter(
+      filtered = paged.filter(
         (p) => (p.firstVariant?.finalPrice ?? Infinity) >= th
       );
     }
@@ -174,6 +265,7 @@ router.get("/recent-updates", verifyTokenOptional, async (req, res) => {
     res.json({
       page: p,
       limit: l,
+      items: filtered,
       data: filtered,
       totalPages,
       total,

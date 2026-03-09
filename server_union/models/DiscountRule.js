@@ -1,41 +1,40 @@
-// server/models/DiscountRule.js
-const mongoose = require("mongoose");
+const {
+  createFirestoreModel,
+} = require("../utils/firestoreModel");
 
-/**
- * قاعدة خصم ديناميكية حسب مجموع الطلب (subtotal).
- * أمثلة:
- *  - threshold = 1000, type=percent, value=5   => خصم 5% إذا subtotal >= 1000
- *  - threshold = 2000, type=percent, value=10  => خصم 10% إذا subtotal >= 2000
- * يدعم تفعيل/تعطيل وفترة زمنية اختيارية.
- */
-
-const DiscountRuleSchema = new mongoose.Schema(
-  {
-    name: { type: String, default: "" }, // اسم وصفي اختياري
-    threshold: { type: Number, required: true, min: 0 }, // أقل مجموع لتفعيل الخصم (بالشيكل)
-    type: {
-      type: String,
-      enum: ["percent", "fixed"],
-      default: "percent",
-    }, // نوع الخصم: نسبة مئوية أو قيمة ثابتة
-    value: { type: Number, required: true, min: 0 }, // قيمة الخصم: إن كانت percent -> % ، وإن كانت fixed -> شيكل
-    isActive: { type: Boolean, default: true },
-    startAt: { type: Date, default: null }, // اختياري
-    endAt: { type: Date, default: null }, // اختياري
-    priority: { type: Number, default: 0 }, // لتقديم قاعدة على أخرى عند نفس الـ threshold
+const DiscountRule = createFirestoreModel({
+  modelName: "DiscountRule",
+  collectionName: "discount_rules",
+  defaults: () => ({
+    name: "",
+    threshold: 0,
+    type: "percent",
+    value: 0,
+    isActive: true,
+    startAt: null,
+    endAt: null,
+    priority: 0,
+  }),
+  beforeSave: (doc) => {
+    const out = { ...doc };
+    out.name = String(out.name || "").trim();
+    out.threshold = Number.isFinite(Number(out.threshold))
+      ? Math.max(0, Number(out.threshold))
+      : 0;
+    out.type = ["percent", "fixed"].includes(String(out.type || ""))
+      ? String(out.type)
+      : "percent";
+    out.value = Number.isFinite(Number(out.value))
+      ? Math.max(0, Number(out.value))
+      : 0;
+    out.isActive = out.isActive !== false;
+    out.startAt = out.startAt ? new Date(out.startAt) : null;
+    out.endAt = out.endAt ? new Date(out.endAt) : null;
+    out.priority = Number.isFinite(Number(out.priority))
+      ? Number(out.priority)
+      : 0;
+    return out;
   },
-  { timestamps: true }
-);
-
-// للاستعلام السريع: فعّالة + حد أدنى
-DiscountRuleSchema.index({
-  isActive: 1,
-  threshold: 1,
-  startAt: 1,
-  endAt: 1,
-  priority: -1,
 });
 
-module.exports =
-  mongoose.models.DiscountRule ||
-  mongoose.model("DiscountRule", DiscountRuleSchema);
+module.exports = DiscountRule;

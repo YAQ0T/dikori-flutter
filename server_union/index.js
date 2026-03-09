@@ -5,7 +5,6 @@
 
 const express = require("express");
 const cors = require("cors");
-const mongoose = require("mongoose");
 const crypto = require("crypto");
 const helmet = require("helmet");
 const compression = require("compression");
@@ -386,34 +385,22 @@ app.post(
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-/* ---------- Mongo ---------- */
-
+/* ---------- Firestore ---------- */
 if (process.env.NODE_ENV !== "test") {
-  mongoose
-    .connect(process.env.MONGO_URI, {
-      serverSelectionTimeoutMS: 15000,
-      family: 4,
-    })
+  Promise.resolve()
     .then(async () => {
-      console.log("✅ MongoDB connected");
-
-      try {
-        const dropped = await Product.syncIndexes();
-        if (Array.isArray(dropped) && dropped.length) {
-          console.log(
-            "🔁 Product indexes synchronized (dropped):",
-            dropped.join(", ")
-          );
-        } else {
-          console.log("🔁 Product indexes synchronized");
-        }
-      } catch (err) {
-        console.error("⚠️ Failed to sync Product indexes:", err?.message || err);
+      const dropped = await Product.syncIndexes();
+      if (Array.isArray(dropped) && dropped.length) {
+        console.log(
+          "🔁 Product indexes synchronized (dropped):",
+          dropped.join(", ")
+        );
+      } else {
+        console.log("🔁 Product indexes synchronized");
       }
     })
     .catch((err) => {
-      console.error("❌ Mongo error:", err);
-      process.exit(1);
+      console.error("⚠️ Firestore boot warning:", err?.message || err);
     });
 }
 
@@ -421,6 +408,7 @@ if (process.env.NODE_ENV !== "test") {
 app.use("/api/contact", require("./routes/contact"));
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/variants", require("./routes/variants"));
+app.use("/api/products", require("./routes/products.recent-updates"));
 app.use("/api/products", require("./routes/products"));
 app.use("/api/orders", require("./routes/orders"));
 app.use("/api/users", require("./routes/user"));
@@ -455,14 +443,24 @@ if (process.env.NODE_ENV !== "test") {
   server = app.listen(PORT, () => console.log(`🚀 Server on :${PORT}`));
 
   /* ---------- Graceful Shutdown ---------- */
-  const shutdown = () => {
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log("🛑 Shutting down...");
-    server.close(() => {
-      mongoose.connection.close(false, () => {
-        console.log("🔌 MongoDB connection closed");
-        process.exit(0);
+    try {
+      await new Promise((resolve, reject) => {
+        server.close((err) => {
+          if (err) return reject(err);
+          return resolve();
+        });
       });
-    });
+      console.log("🔌 HTTP server closed");
+      process.exit(0);
+    } catch (err) {
+      console.error("Failed during shutdown:", err?.message || err);
+      process.exit(1);
+    }
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);

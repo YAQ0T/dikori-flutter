@@ -512,6 +512,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    _api.setSessionUpdateHandler(_handleSessionTokenUpdate);
     _bootstrap();
   }
 
@@ -533,9 +534,13 @@ class _HomePageState extends State<HomePage> {
   Future<void> _restoreSession() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('token');
+    final refreshToken = prefs.getString('refresh_token');
     final userJson = prefs.getString('user_json');
     if (token != null && token.isNotEmpty) {
       _api.setToken(token);
+    }
+    if (refreshToken != null && refreshToken.isNotEmpty) {
+      _api.setRefreshToken(refreshToken);
     }
     if (userJson != null) {
       try {
@@ -549,12 +554,34 @@ class _HomePageState extends State<HomePage> {
   Future<void> _persistSession(ApiSession session) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('token', session.token);
+    if (session.refreshToken != null && session.refreshToken!.isNotEmpty) {
+      await prefs.setString('refresh_token', session.refreshToken!);
+    } else {
+      await prefs.remove('refresh_token');
+    }
     await prefs.setString('user_json', jsonEncode(session.user.toJson()));
+  }
+
+  Future<void> _handleSessionTokenUpdate({
+    required String token,
+    String? refreshToken,
+    int? expiresIn,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('token', token);
+    if (refreshToken != null && refreshToken.isNotEmpty) {
+      await prefs.setString('refresh_token', refreshToken);
+    }
+    if (expiresIn != null) {
+      await prefs.setInt('token_expires_in', expiresIn);
+    }
   }
 
   Future<void> _clearSession() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('token');
+    await prefs.remove('refresh_token');
+    await prefs.remove('token_expires_in');
     await prefs.remove('user_json');
   }
 
@@ -1590,6 +1617,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _logout() async {
     await _clearSession();
     _api.setToken(null);
+    _api.setRefreshToken(null);
     setState(() {
       _user = null;
       _favoriteIds.clear();

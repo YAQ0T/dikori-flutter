@@ -1,87 +1,62 @@
-const mongoose = require("mongoose");
+const {
+  createFirestoreModel,
+} = require("../utils/firestoreModel");
 
-const LocalizedSchema = new mongoose.Schema(
-  {
-    ar: { type: String, default: "" },
-    he: { type: String, default: "" },
+const SITE_SETTINGS_DOC_ID = "main";
+
+const defaultLocalized = () => ({ ar: "", he: "" });
+
+const SiteSettings = createFirestoreModel({
+  modelName: "SiteSettings",
+  collectionName: "site_settings",
+  defaults: () => ({
+    seeded: false,
+    hero: {
+      kicker: defaultLocalized(),
+      title: defaultLocalized(),
+      subtitle: defaultLocalized(),
+      imageUrl: "",
+      calloutLabel: defaultLocalized(),
+      calloutValue: defaultLocalized(),
+      primaryCtaLabel: defaultLocalized(),
+      secondaryCtaLabel: defaultLocalized(),
+    },
+    homeCategories: [],
+    categoryMenu: {
+      main: [],
+      sub: [],
+    },
+    testimonialsTitle: defaultLocalized(),
+    testimonials: [],
+  }),
+  beforeSave: (doc) => {
+    const out = { ...doc };
+    out.seeded = out.seeded === true;
+    out.hero = out.hero && typeof out.hero === "object" ? out.hero : {};
+    out.homeCategories = Array.isArray(out.homeCategories)
+      ? out.homeCategories
+      : [];
+    out.categoryMenu = out.categoryMenu && typeof out.categoryMenu === "object"
+      ? out.categoryMenu
+      : { main: [], sub: [] };
+    out.categoryMenu.main = Array.isArray(out.categoryMenu.main)
+      ? out.categoryMenu.main
+      : [];
+    out.categoryMenu.sub = Array.isArray(out.categoryMenu.sub)
+      ? out.categoryMenu.sub
+      : [];
+    out.testimonials = Array.isArray(out.testimonials) ? out.testimonials : [];
+    return out;
   },
-  { _id: false }
-);
-
-const HeroSchema = new mongoose.Schema(
-  {
-    kicker: { type: LocalizedSchema, default: () => ({}) },
-    title: { type: LocalizedSchema, default: () => ({}) },
-    subtitle: { type: LocalizedSchema, default: () => ({}) },
-    imageUrl: { type: String, default: "" },
-    calloutLabel: { type: LocalizedSchema, default: () => ({}) },
-    calloutValue: { type: LocalizedSchema, default: () => ({}) },
-    primaryCtaLabel: { type: LocalizedSchema, default: () => ({}) },
-    secondaryCtaLabel: { type: LocalizedSchema, default: () => ({}) },
+  staticMethods: {
+    async getSingleton() {
+      let doc = await this.findById(SITE_SETTINGS_DOC_ID);
+      if (!doc) {
+        doc = await this.create({ _id: SITE_SETTINGS_DOC_ID });
+      }
+      return doc;
+    },
   },
-  { _id: false }
-);
+});
 
-const CategorySchema = new mongoose.Schema(
-  {
-    value: { type: String, required: true },
-    label: { type: LocalizedSchema, default: () => ({}) },
-    imageUrl: { type: String, default: "" },
-    order: { type: Number, default: 0 },
-  },
-  { _id: false }
-);
-
-const SubCategorySchema = new mongoose.Schema(
-  {
-    main: { type: String, required: true },
-    value: { type: String, required: true },
-    label: { type: LocalizedSchema, default: () => ({}) },
-    imageUrl: { type: String, default: "" },
-    order: { type: Number, default: 0 },
-  },
-  { _id: false }
-);
-
-const CategoryMenuSchema = new mongoose.Schema(
-  {
-    main: { type: [CategorySchema], default: [] },
-    sub: { type: [SubCategorySchema], default: [] },
-  },
-  { _id: false }
-);
-
-const TestimonialSchema = new mongoose.Schema(
-  {
-    name: { type: LocalizedSchema, default: () => ({}) },
-    role: { type: LocalizedSchema, default: () => ({}) },
-    quote: { type: LocalizedSchema, default: () => ({}) },
-    imageUrl: { type: String, default: "" },
-    rating: { type: Number, min: 1, max: 5, default: 5 },
-    order: { type: Number, default: 0 },
-    isActive: { type: Boolean, default: true },
-  },
-  { _id: false }
-);
-
-const SiteSettingsSchema = new mongoose.Schema(
-  {
-    seeded: { type: Boolean, default: false },
-    hero: { type: HeroSchema, default: () => ({}) },
-    homeCategories: { type: [CategorySchema], default: [] },
-    categoryMenu: { type: CategoryMenuSchema, default: () => ({}) },
-    testimonialsTitle: { type: LocalizedSchema, default: () => ({}) },
-    testimonials: { type: [TestimonialSchema], default: [] },
-  },
-  { timestamps: true }
-);
-
-SiteSettingsSchema.statics.getSingleton = async function () {
-  let doc = await this.findOne();
-  if (!doc) {
-    doc = await this.create({});
-  }
-  return doc;
-};
-
-module.exports = mongoose.model("SiteSettings", SiteSettingsSchema);
+module.exports = SiteSettings;

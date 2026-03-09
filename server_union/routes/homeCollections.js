@@ -21,6 +21,32 @@ const updateCollectionsSchema = z
   })
   .passthrough();
 
+const HOME_COLLECTIONS_CACHE_TTL_MS = Math.max(
+  1000,
+  Number(process.env.HOME_COLLECTIONS_CACHE_TTL_MS || 30_000)
+);
+const homeCollectionsCache = new Map();
+
+function readHomeCollectionsCache(allowHidden) {
+  const key = allowHidden ? "hidden" : "visible";
+  const entry = homeCollectionsCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > Number(entry.expiresAt || 0)) return null;
+  return entry.payload || null;
+}
+
+function writeHomeCollectionsCache(allowHidden, payload) {
+  const key = allowHidden ? "hidden" : "visible";
+  homeCollectionsCache.set(key, {
+    payload,
+    expiresAt: Date.now() + HOME_COLLECTIONS_CACHE_TTL_MS,
+  });
+}
+
+function clearHomeCollectionsCache() {
+  homeCollectionsCache.clear();
+}
+
 // ====== Admin/Dealer: حفظ القوائم ======
 router.put(
   "/",
@@ -80,6 +106,7 @@ router.put(
       .populate("newArrivals")
       .lean();
 
+    clearHomeCollectionsCache();
     return res.json(populated || { recommended: [], newArrivals: [] });
   } catch (err) {
     console.error("PUT /api/home-collections error:", err);
@@ -106,30 +133,42 @@ const shouldIncludeHidden = (req) => {
   return canViewHiddenProducts(req?.user?.role);
 };
 
+async function loadCollectionsPayload(allowHidden) {
+  const cached = readHomeCollectionsCache(allowHidden);
+  if (cached) return cached;
+
+  const doc = await HomeCollections.findOne({})
+    .populate({
+      path: "recommended",
+      ...(allowHidden ? {} : { match: visibleProductMatch }),
+    })
+    .populate({
+      path: "newArrivals",
+      ...(allowHidden ? {} : { match: visibleProductMatch }),
+    })
+    .lean();
+
+  const payload = !doc
+    ? { recommended: [], newArrivals: [] }
+    : {
+        ...doc,
+        recommended: Array.isArray(doc.recommended)
+          ? doc.recommended.filter(Boolean)
+          : [],
+        newArrivals: Array.isArray(doc.newArrivals)
+          ? doc.newArrivals.filter(Boolean)
+          : [],
+      };
+  writeHomeCollectionsCache(allowHidden, payload);
+  return payload;
+}
+
 // ====== Get: كلا القائمتين ======
 router.get("/", verifyTokenOptional, async (req, res) => {
   try {
     const allowHidden = shouldIncludeHidden(req);
-    const doc = await HomeCollections.findOne({})
-      .populate({
-        path: "recommended",
-        ...(allowHidden ? {} : { match: visibleProductMatch }),
-      })
-      .populate({
-        path: "newArrivals",
-        ...(allowHidden ? {} : { match: visibleProductMatch }),
-      })
-      .lean();
-    if (!doc) return res.json({ recommended: [], newArrivals: [] });
-    return res.json({
-      ...doc,
-      recommended: Array.isArray(doc.recommended)
-        ? doc.recommended.filter(Boolean)
-        : [],
-      newArrivals: Array.isArray(doc.newArrivals)
-        ? doc.newArrivals.filter(Boolean)
-        : [],
-    });
+    const payload = await loadCollectionsPayload(allowHidden);
+    return res.json(payload);
   } catch (err) {
     console.error("GET /api/home-collections error:", err);
     return res.status(500).json({ message: "خطأ في الخادم" });
@@ -140,16 +179,9 @@ router.get("/", verifyTokenOptional, async (req, res) => {
 router.get("/recommended", verifyTokenOptional, async (req, res) => {
   try {
     const allowHidden = shouldIncludeHidden(req);
-    const doc = await HomeCollections.findOne({}).lean();
-    if (!doc) return res.json([]);
-    const populated = await HomeCollections.findById(doc._id)
-      .populate({
-        path: "recommended",
-        ...(allowHidden ? {} : { match: visibleProductMatch }),
-      })
-      .lean();
-    const list = Array.isArray(populated?.recommended)
-      ? populated.recommended.filter(Boolean)
+    const payload = await loadCollectionsPayload(allowHidden);
+    const list = Array.isArray(payload?.recommended)
+      ? payload.recommended.filter(Boolean)
       : [];
     return res.json(list);
   } catch (err) {
@@ -162,16 +194,9 @@ router.get("/recommended", verifyTokenOptional, async (req, res) => {
 router.get("/new", verifyTokenOptional, async (req, res) => {
   try {
     const allowHidden = shouldIncludeHidden(req);
-    const doc = await HomeCollections.findOne({}).lean();
-    if (!doc) return res.json([]);
-    const populated = await HomeCollections.findById(doc._id)
-      .populate({
-        path: "newArrivals",
-        ...(allowHidden ? {} : { match: visibleProductMatch }),
-      })
-      .lean();
-    const list = Array.isArray(populated?.newArrivals)
-      ? populated.newArrivals.filter(Boolean)
+    const payload = await loadCollectionsPayload(allowHidden);
+    const list = Array.isArray(payload?.newArrivals)
+      ? payload.newArrivals.filter(Boolean)
       : [];
     return res.json(list);
   } catch (err) {

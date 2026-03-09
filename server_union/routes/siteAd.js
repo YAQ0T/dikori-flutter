@@ -6,6 +6,11 @@ const { verifyToken, isAdmin } = require("../middleware/authMiddleware");
 const { validateBody, z } = require("../utils/validate");
 
 const router = express.Router();
+const SITE_AD_CACHE_TTL_MS = Math.max(
+  1000,
+  Number(process.env.SITE_AD_CACHE_TTL_MS || 30_000)
+);
+let siteAdCache = { payload: null, expiresAt: 0 };
 
 const localizedSchema = z
   .object({
@@ -65,12 +70,49 @@ function isValidHttpUrl(value) {
   }
 }
 
+function isFirestoreQuotaError(err) {
+  const code = String(err?.code || "");
+  const details = String(err?.details || "");
+  return (
+    code === "8" ||
+    code.toLowerCase() === "resource_exhausted" ||
+    details.toLowerCase().includes("quota exceeded")
+  );
+}
+
+function readSiteAdCache() {
+  if (!siteAdCache.payload) return null;
+  if (Date.now() > Number(siteAdCache.expiresAt || 0)) return null;
+  return siteAdCache.payload;
+}
+
+function writeSiteAdCache(payload) {
+  siteAdCache = {
+    payload,
+    expiresAt: Date.now() + SITE_AD_CACHE_TTL_MS,
+  };
+}
+
+function clearSiteAdCache() {
+  siteAdCache = { payload: null, expiresAt: 0 };
+}
+
 router.get("/", async (_req, res) => {
   try {
+    const cached = readSiteAdCache();
+    if (cached) return res.json(cached);
+
     const doc = await SiteAd.getSingleton();
-    return res.json(toResponse(doc));
+    const responsePayload = toResponse(doc);
+    writeSiteAdCache(responsePayload);
+    return res.json(responsePayload);
   } catch (err) {
     console.error("site-ad get error:", err);
+    if (isFirestoreQuotaError(err)) {
+      return res
+        .status(503)
+        .json({ message: "Firestore quota exceeded. Please try again later." });
+    }
     return res.status(500).json({ message: "تعذّر جلب الإعلان" });
   }
 });
@@ -146,9 +188,17 @@ router.put(
       }
 
       await doc.save();
-      return res.json(toResponse(doc));
+      const responsePayload = toResponse(doc);
+      writeSiteAdCache(responsePayload);
+      return res.json(responsePayload);
     } catch (err) {
+      clearSiteAdCache();
       console.error("site-ad update error:", err);
+      if (isFirestoreQuotaError(err)) {
+        return res
+          .status(503)
+          .json({ message: "Firestore quota exceeded. Please try again later." });
+      }
       return res.status(500).json({ message: "تعذّر حفظ الإعلان" });
     }
   }

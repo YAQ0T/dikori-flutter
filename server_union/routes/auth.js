@@ -5,6 +5,12 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const User = require("../models/User");
 const { getJwtSecret } = require("../utils/config");
+const { getFirebaseAuth, getFirebaseProjectId } = require("../utils/firebaseAdmin");
+const {
+  issueFirebaseSession,
+  refreshFirebaseSession,
+  getAuthMode,
+} = require("../utils/firebaseAuth");
 const { sendSMSHTD, normalizePhone } = require("../utils/smsHtd");
 const { createRateLimiter } = require("../utils/rateLimit");
 const { verifyToken } = require("../middleware/authMiddleware");
@@ -28,7 +34,6 @@ const RESET_PASSWORD_THROTTLE_MESSAGE =
 /* =========================
    ضبط بيئة/إعدادات
 ========================= */
-const JWT_SECRET = getJwtSecret();
 const limiterSignup = createRateLimiter({
   windowMs: 10 * 60 * 1000,
   max: 20,
@@ -148,11 +153,294 @@ const passwordResetSchema = z
     path: ["phone"],
   });
 
+const sessionRefreshSchema = z.object({
+  refreshToken: z.string().min(1),
+});
+
+const socialAuthSchema = z.object({
+  idToken: z.string().min(1),
+});
+
 function normalizeEmail(email) {
   if (!email) return null;
   const e = String(email).trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return null;
   return e;
+}
+
+function issueLegacyJwt(user) {
+  const jwtSecret = getJwtSecret();
+  return jwt.sign(
+    { id: String(user._id), role: user.role || "user" },
+    jwtSecret,
+    { expiresIn: "90d" }
+  );
+}
+
+async function issueAppSession(user) {
+  const mode = getAuthMode();
+  const legacyToken = issueLegacyJwt(user);
+  const localUserId = String(user?._id || "").trim();
+  const firebaseUid = String(user?.firebaseUid || "").trim() || localUserId;
+
+  if (mode === "jwt") {
+    return { token: legacyToken, authProvider: "jwt" };
+  }
+
+  if (mode === "hybrid") {
+    try {
+      const session = await issueFirebaseSession({
+        uid: firebaseUid,
+        localUserId,
+        role: user.role || "user",
+        email: user.email || null,
+        phone: user.phone || null,
+        name: user.name || "",
+      });
+      return {
+        token: session.idToken,
+        refreshToken: session.refreshToken || undefined,
+        expiresIn: session.expiresIn || undefined,
+        legacyToken,
+        authProvider: "firebase",
+      };
+    } catch (err) {
+      console.error("hybrid auth fallback to jwt:", err?.message || err);
+      return {
+        token: legacyToken,
+        authProvider: "jwt-fallback",
+      };
+    }
+  }
+
+  const session = await issueFirebaseSession({
+    uid: firebaseUid,
+    localUserId,
+    role: user.role || "user",
+    email: user.email || null,
+    phone: user.phone || null,
+    name: user.name || "",
+  });
+  return {
+    token: session.idToken,
+    refreshToken: session.refreshToken || undefined,
+    expiresIn: session.expiresIn || undefined,
+    legacyToken,
+    authProvider: "firebase",
+  };
+}
+
+function getDisplayNameFromEmail(email) {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return "Google User";
+  const local = normalized.split("@")[0] || "";
+  const safeLocal = local.replace(/[._-]+/g, " ").trim();
+  return safeLocal || "Google User";
+}
+
+function decodeJwtPayloadUnsafe(jwtToken) {
+  try {
+    const parts = String(jwtToken || "").split(".");
+    if (parts.length < 2) return null;
+    const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = payload.padEnd(Math.ceil(payload.length / 4) * 4, "=");
+    const json = Buffer.from(padded, "base64").toString("utf8");
+    const parsed = JSON.parse(json);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function verifyFirebaseIdTokenWithFallback(idToken) {
+  const auth = getFirebaseAuth();
+  let decoded = null;
+  let verificationError = null;
+  try {
+    decoded = await auth.verifyIdToken(idToken, true);
+  } catch (err) {
+    verificationError = err;
+    try {
+      decoded = await auth.verifyIdToken(idToken, false);
+      verificationError = null;
+    } catch (err2) {
+      verificationError = err2;
+    }
+  }
+  return { decoded, verificationError };
+}
+
+function socialProviderDisplayName(provider) {
+  if (provider === "google.com") return "Google";
+  if (provider === "facebook.com") return "Facebook";
+  return "social";
+}
+
+function isFirestoreQuotaError(err) {
+  const code = String(err?.code || "");
+  const details = String(err?.details || "");
+  return (
+    code === "8" ||
+    code.toLowerCase() === "resource_exhausted" ||
+    details.toLowerCase().includes("quota exceeded")
+  );
+}
+
+async function sendOtpToUserPhone(user) {
+  const code = Math.floor(100000 + Math.random() * 900000);
+  if (typeof user.setPhoneOTP === "function") {
+    user.setPhoneOTP(code);
+  } else {
+    await setPhoneOTPOnUser(user, code);
+  }
+  await user.save();
+  if (user.phone) {
+    await sendSMSHTD(user.phone, `رمز التحقق: ${code}`);
+  }
+}
+
+async function handleSocialAuth(req, res, expectedProvider) {
+  try {
+    const idToken = String(req.body?.idToken || "").trim();
+    if (!idToken) {
+      return res.status(400).json({ message: "Social token is required." });
+    }
+
+    const { decoded, verificationError } =
+      await verifyFirebaseIdTokenWithFallback(idToken);
+
+    if (!decoded) {
+      const code = String(verificationError?.code || "");
+      if (process.env.NODE_ENV !== "production") {
+        const payload = decodeJwtPayloadUnsafe(idToken);
+        return res.status(401).json({
+          message: "Invalid social token.",
+          errorCode: code || "auth/invalid-id-token",
+          tokenAud: payload?.aud || null,
+          expectedProject: getFirebaseProjectId() || null,
+        });
+      }
+      return res.status(401).json({ message: "Invalid social token." });
+    }
+
+    const provider = String(decoded?.firebase?.sign_in_provider || "");
+    if (provider !== expectedProvider) {
+      return res.status(400).json({
+        message: `${socialProviderDisplayName(expectedProvider)} token is required.`,
+      });
+    }
+
+    const firebaseUid = String(decoded?.uid || "").trim();
+    const email = normalizeEmail(decoded?.email);
+    const displayName = String(decoded?.name || "").trim();
+
+    if (!firebaseUid) {
+      return res.status(400).json({ message: "Invalid social account." });
+    }
+
+    let user = await User.findOne({ firebaseUid });
+    if (!user && email) {
+      user = await User.findOne({ email });
+    }
+
+    if (!user && !email) {
+      return res.status(400).json({
+        message:
+          "Social account email is required. Please enable email access for this provider.",
+      });
+    }
+
+    const mappedProvider =
+      expectedProvider === "google.com" ? "google" : "facebook";
+
+    if (!user) {
+      user = new User({
+        name: displayName || getDisplayNameFromEmail(email),
+        email: email || undefined,
+        role: "user",
+        authProvider: mappedProvider,
+        firebaseUid,
+        phoneVerified: false,
+      });
+    } else {
+      user.firebaseUid = firebaseUid;
+      if (email && !user.email) user.email = email;
+      if (!String(user.name || "").trim()) {
+        user.name = displayName || getDisplayNameFromEmail(email);
+      }
+      if (user.authProvider !== "local") {
+        user.authProvider = mappedProvider;
+      }
+    }
+
+    if (!user.phone) {
+      user.phoneVerified = false;
+      user.phoneVerificationCodeHash = undefined;
+      user.phoneVerificationExpires = undefined;
+      user.phoneVerificationAttempts = 0;
+      await user.save();
+      return res.status(428).json({
+        code: "PHONE_REQUIRED",
+        userId: user._id,
+        message: "يرجى إدخال رقم الجوال ثم التحقق بالرمز للمتابعة.",
+      });
+    }
+
+    if (!user.phoneVerified) {
+      try {
+        await sendOtpToUserPhone(user);
+      } catch (smsErr) {
+        console.error("social auto-otp error:", smsErr);
+      }
+
+      return res.status(403).json({
+        code: "NEEDS_VERIFICATION",
+        message: "يجب توثيق رقم الجوال قبل تسجيل الدخول. أرسلنا رمز تحقق جديد.",
+        userId: user._id,
+        phone: user.phone || null,
+      });
+    }
+
+    await user.save();
+
+    const session = await issueAppSession(user);
+    return res.json({
+      token: session.token,
+      refreshToken: session.refreshToken,
+      expiresIn: session.expiresIn,
+      legacyToken: session.legacyToken,
+      authProvider: session.authProvider,
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email || null,
+        role: user.role,
+        phone: user.phone || null,
+        phoneVerified: user.phoneVerified === true,
+      },
+    });
+  } catch (err) {
+    if (isFirestoreQuotaError(err)) {
+      return res
+        .status(503)
+        .json({ message: "Firestore quota exceeded. Please try again later." });
+    }
+    const code = String(err?.code || "");
+    if (code.startsWith("auth/")) {
+      if (process.env.NODE_ENV !== "production") {
+        const payload = decodeJwtPayloadUnsafe(req.body?.idToken);
+        return res.status(401).json({
+          message: "Invalid social token.",
+          errorCode: code,
+          tokenAud: payload?.aud || null,
+          expectedProject: getFirebaseProjectId() || null,
+        });
+      }
+      return res.status(401).json({ message: "Invalid social token." });
+    }
+    console.error("social auth error:", err);
+    return res.status(500).json({ message: "Social auth failed." });
+  }
 }
 
 /* =========================
@@ -188,6 +476,23 @@ async function setPhoneOTPOnUser(user, code) {
   user.phoneVerificationExpires = new Date(Date.now() + 5 * 60 * 1000); // 5 دقائق
   user.phoneVerificationAttempts = 0;
 }
+
+/* =========================
+   تسجيل الدخول/إنشاء حساب عبر Social
+========================= */
+router.post(
+  "/google",
+  limiterLogin,
+  validateBody(socialAuthSchema),
+  async (req, res) => handleSocialAuth(req, res, "google.com")
+);
+
+router.post(
+  "/facebook",
+  limiterLogin,
+  validateBody(socialAuthSchema),
+  async (req, res) => handleSocialAuth(req, res, "facebook.com")
+);
 
 /* =========================
    إنشاء حساب
@@ -258,6 +563,11 @@ router.post("/signup", limiterSignup, validateBody(signupSchema), async (req, re
       const what = keys.length ? keys.join(", ") : "حقل فريد";
       return res.status(409).json({ message: `قيمة مكررة في ${what}` });
     }
+    if (isFirestoreQuotaError(err)) {
+      return res
+        .status(503)
+        .json({ message: "Firestore quota exceeded. Please try again later." });
+    }
     console.error("signup error:", err);
     return res
       .status(500)
@@ -276,25 +586,36 @@ router.post(
   try {
     const { userId, phone } = req.body || {};
 
-    const user = userId
-      ? await User.findById(userId)
-      : await User.findOne({ phone: normalizePhone(phone) });
+    let user = null;
+    if (userId) {
+      user = await User.findById(userId);
+      if (!user) return res.status(404).json({ message: "المستخدم غير موجود" });
 
-    if (!user) return res.status(404).json({ message: "المستخدم غير موجود" });
+      if (phone) {
+        const normalizedPhone = normalizePhone(phone);
+        if (!normalizedPhone) {
+          return res.status(400).json({ message: "رقم الجوال غير صالح" });
+        }
 
-    const code = Math.floor(100000 + Math.random() * 900000);
+        const existingByPhone = await User.findOne({ phone: normalizedPhone }).lean();
+        if (existingByPhone && String(existingByPhone._id) !== String(user._id)) {
+          return res.status(409).json({ message: "رقم الجوال مستخدم مسبقًا." });
+        }
 
-    if (typeof user.setPhoneOTP === "function") {
-      user.setPhoneOTP(code);
+        user.phone = normalizedPhone;
+        user.phoneVerified = false;
+      }
     } else {
-      await setPhoneOTPOnUser(user, code);
+      const normalizedPhone = normalizePhone(phone);
+      user = await User.findOne({ phone: normalizedPhone });
+      if (!user) return res.status(404).json({ message: "المستخدم غير موجود" });
     }
 
-    await user.save();
-
-    if (user.phone) {
-      await sendSMSHTD(user.phone, `رمز التحقق: ${code}`);
+    if (!user.phone) {
+      return res.status(400).json({ message: "أدخل رقم جوال لإرسال الرمز." });
     }
+
+    await sendOtpToUserPhone(user);
 
     return res.json({
       ok: true,
@@ -304,6 +625,11 @@ router.post(
         "إن كان الجوال مسجّلًا، فقد أرسلنا رمز تحقق جديد. صالح لمدة 5 دقائق.",
     });
   } catch (err) {
+    if (isFirestoreQuotaError(err)) {
+      return res
+        .status(503)
+        .json({ message: "Firestore quota exceeded. Please try again later." });
+    }
     console.error("send-sms-code error:", err);
     res.status(500).json({ error: err.message });
   }
@@ -348,12 +674,14 @@ router.post(
     user.phoneVerificationAttempts = 0;
     await user.save();
 
-    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, {
-      expiresIn: "90d",
-    });
+    const session = await issueAppSession(user);
 
     return res.json({
-      token,
+      token: session.token,
+      refreshToken: session.refreshToken,
+      expiresIn: session.expiresIn,
+      legacyToken: session.legacyToken,
+      authProvider: session.authProvider,
       user: {
         _id: user._id,
         name: user.name,
@@ -365,6 +693,11 @@ router.post(
       message: "تم توثيق رقم الهاتف بنجاح",
     });
   } catch (err) {
+    if (isFirestoreQuotaError(err)) {
+      return res
+        .status(503)
+        .json({ message: "Firestore quota exceeded. Please try again later." });
+    }
     console.error("verify-sms error:", err);
     res.status(500).json({ error: err.message });
   }
@@ -389,6 +722,13 @@ router.post("/login", limiterLogin, validateBody(loginSchema), async (req, res) 
     const user = await User.findOne(query);
     if (!user)
       return res.status(400).json({ message: "بيانات الدخول غير صحيحة" });
+
+    if (!user.password) {
+      return res.status(400).json({
+        message:
+          "هذا الحساب مسجل عبر تسجيل اجتماعي. استخدم Google أو Facebook.",
+      });
+    }
 
     const match = await bcrypt.compare(password, user.password);
     if (!match) return res.status(401).json({ message: "كلمة المرور خاطئة" });
@@ -417,12 +757,14 @@ router.post("/login", limiterLogin, validateBody(loginSchema), async (req, res) 
       });
     }
 
-    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, {
-      expiresIn: "90d",
-    });
+    const session = await issueAppSession(user);
 
     res.json({
-      token,
+      token: session.token,
+      refreshToken: session.refreshToken,
+      expiresIn: session.expiresIn,
+      legacyToken: session.legacyToken,
+      authProvider: session.authProvider,
       user: {
         _id: user._id,
         name: user.name,
@@ -433,10 +775,45 @@ router.post("/login", limiterLogin, validateBody(loginSchema), async (req, res) 
       },
     });
   } catch (err) {
+    if (isFirestoreQuotaError(err)) {
+      return res
+        .status(503)
+        .json({ message: "Firestore quota exceeded. Please try again later." });
+    }
     console.error("login error:", err);
     res.status(500).json({ error: err.message });
   }
 });
+
+/* =========================
+   تجديد Firebase session
+========================= */
+router.post(
+  "/session/refresh",
+  validateBody(sessionRefreshSchema),
+  async (req, res) => {
+    try {
+      const mode = getAuthMode();
+      if (mode === "jwt") {
+        return res.status(400).json({
+          message: "Session refresh is not available in JWT-only mode.",
+        });
+      }
+
+      const { refreshToken } = req.body || {};
+      const session = await refreshFirebaseSession(refreshToken);
+      return res.json({
+        token: session.idToken,
+        refreshToken: session.refreshToken,
+        expiresIn: session.expiresIn,
+        userId: session.userId,
+      });
+    } catch (err) {
+      console.error("session refresh error:", err?.message || err);
+      return res.status(401).json({ message: "تعذر تجديد الجلسة" });
+    }
+  }
+);
 
 /* =========================
    جلب المستخدم الحالي
@@ -465,6 +842,11 @@ router.get("/me", verifyToken, async (req, res) => {
       phoneVerified: user.phoneVerified === true,
     });
   } catch (err) {
+    if (isFirestoreQuotaError(err)) {
+      return res
+        .status(503)
+        .json({ message: "Firestore quota exceeded. Please try again later." });
+    }
     console.error("auth/me error:", err);
     return res.status(500).json({ message: "تعذر جلب بيانات المستخدم" });
   }
@@ -512,6 +894,11 @@ router.post(
       message: "إن كان الحساب موجودًا سنرسل لك رمز الاستعادة (صالح 10 دقائق).",
     });
   } catch (err) {
+    if (isFirestoreQuotaError(err)) {
+      return res
+        .status(503)
+        .json({ message: "Firestore quota exceeded. Please try again later." });
+    }
     console.error("password-request error:", err);
     res.status(500).json({ error: err.message });
   }
@@ -587,6 +974,11 @@ router.post(
     await user.save();
     return res.json({ ok: true, message: "تم تحديث كلمة المرور بنجاح" });
   } catch (err) {
+    if (isFirestoreQuotaError(err)) {
+      return res
+        .status(503)
+        .json({ message: "Firestore quota exceeded. Please try again later." });
+    }
     console.error("password-reset error:", err);
     res.status(500).json({ error: err.message });
   }

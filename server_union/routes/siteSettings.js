@@ -5,6 +5,11 @@ const { verifyToken, isAdmin } = require("../middleware/authMiddleware");
 const { validateBody, z } = require("../utils/validate");
 
 const router = express.Router();
+const SITE_SETTINGS_CACHE_TTL_MS = Math.max(
+  1000,
+  Number(process.env.SITE_SETTINGS_CACHE_TTL_MS || 60_000)
+);
+let siteSettingsCache = { payload: null, expiresAt: 0 };
 
 const localizedSchema = z
   .object({
@@ -72,9 +77,30 @@ const siteSettingsSchema = z
   })
   .passthrough();
 
+function readSiteSettingsCache() {
+  if (!siteSettingsCache.payload) return null;
+  if (Date.now() > Number(siteSettingsCache.expiresAt || 0)) return null;
+  return siteSettingsCache.payload;
+}
+
+function writeSiteSettingsCache(payload) {
+  siteSettingsCache = {
+    payload,
+    expiresAt: Date.now() + SITE_SETTINGS_CACHE_TTL_MS,
+  };
+}
+
+function clearSiteSettingsCache() {
+  siteSettingsCache = { payload: null, expiresAt: 0 };
+}
+
 router.get("/", async (_req, res) => {
   try {
+    const cached = readSiteSettingsCache();
+    if (cached) return res.json(cached);
+
     const doc = await SiteSettings.getSingleton();
+    writeSiteSettingsCache(doc);
     return res.json(doc);
   } catch (err) {
     console.error("site-settings get error:", err);
@@ -251,8 +277,10 @@ router.put(
         });
         await Promise.all(ops);
       }
+      clearSiteSettingsCache();
       return res.json(doc);
     } catch (err) {
+      clearSiteSettingsCache();
       console.error("site-settings update error:", err);
       return res.status(500).json({ message: "تعذّر حفظ إعدادات الموقع" });
     }

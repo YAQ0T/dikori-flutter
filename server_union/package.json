@@ -6,6 +6,10 @@
     "test": "node --test",
     "start": "node index.js",
     "dev": "nodemon index.js",
+    "firebase:indexes:deploy": "npx firebase-tools deploy --only firestore:indexes --project dikori-7244d --config ./firebase.json",
+    "firebase:indexes:deploy:project": "npx firebase-tools deploy --only firestore:indexes --config ./firebase.json",
+    "migrate:firestore:products": "node scripts/migrate-products-variants-to-firestore.js",
+    "migrate:firestore:core": "node scripts/migrate-mongo-core-to-firestore.js",
     "download:images": "node scripts/download-images.js --out downloads/images",
     "export:image-manifests": "node scripts/export-image-manifests.js"
   },
@@ -20,6 +24,7 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.0",
     "express": "^5.2.1",
+    "firebase-admin": "^13.7.0",
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^8.16.3",

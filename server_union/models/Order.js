@@ -1,134 +1,145 @@
-// server/models/Order.js
-const mongoose = require("mongoose");
+const {
+  createFirestoreModel,
+} = require("../utils/firestoreModel");
 const { ensureLocalizedObject } = require("../utils/localized");
 
-const LocalizedSchema = new mongoose.Schema(
-  {
-    ar: { type: String, default: "" },
-    he: { type: String, default: "" },
-  },
-  { _id: false }
-);
+const Order = createFirestoreModel({
+  modelName: "Order",
+  collectionName: "orders",
+  defaults: () => ({
+    user: undefined,
+    guestInfo: {
+      name: "",
+      phone: "",
+      email: "",
+      address: "",
+    },
+    isGuest: false,
+    items: [],
+    subtotal: 0,
+    discount: {
+      applied: false,
+      ruleId: null,
+      type: null,
+      value: 0,
+      amount: 0,
+      threshold: 0,
+      name: "",
+    },
+    total: 0,
+    address: "",
+    status: "waiting_confirmation",
+    deliveredAt: undefined,
+    paymentMethod: "cod",
+    paymentCurrency: process.env.PAY_CURRENCY || "ILS",
+    paymentStatus: "unpaid",
+    reference: null,
+    paymentVerifiedAmount: null,
+    paymentVerifiedCurrency: "",
+    paymentTransactionId: "",
+    paymentCardType: "",
+    paymentCardLast4: "",
+    paymentStatusNote: "",
+    bankTransferStatus: "",
+    notes: "",
+  }),
+  beforeSave: (doc) => {
+    const out = { ...doc };
 
-const OrderItemSchema = new mongoose.Schema(
-  {
-    productId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Product",
-      required: true,
-    },
-    variantId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Variant",
-      required: true,
-    },
-    name: {
-      type: LocalizedSchema,
-      required: true,
-      default: () => ({ ar: "", he: "" }),
-    },
-    quantity: { type: Number, min: 1, required: true },
-    price: { type: Number, min: 0, required: true },
-    color: { type: String },
-    measure: { type: String },
-    sku: { type: String },
-    image: { type: String },
-  },
-  { _id: false }
-);
+    out.items = Array.isArray(out.items)
+      ? out.items.map((item) => ({
+          productId: String(item?.productId || "").trim(),
+          variantId: String(item?.variantId || "").trim(),
+          name: ensureLocalizedObject(item?.name),
+          quantity: Math.max(1, Number(item?.quantity || 1)),
+          price: Math.max(0, Number(item?.price || 0)),
+          color:
+            typeof item?.color === "undefined"
+              ? undefined
+              : String(item.color || "").trim(),
+          measure:
+            typeof item?.measure === "undefined"
+              ? undefined
+              : String(item.measure || "").trim(),
+          sku:
+            typeof item?.sku === "undefined"
+              ? undefined
+              : String(item.sku || "").trim(),
+          image:
+            typeof item?.image === "undefined"
+              ? undefined
+              : String(item.image || "").trim(),
+          trackQuantity: item?.trackQuantity === true,
+        }))
+      : [];
 
-OrderItemSchema.pre("validate", function orderItemEnsureLocalized(next) {
-  this.name = ensureLocalizedObject(this.name);
-  next();
+    out.address = String(out.address || "").trim();
+    out.notes = String(out.notes || "").trim();
+
+    if (out.user && typeof out.user === "object") {
+      out.user = {
+        _id: String(out.user._id || "").trim(),
+        name: String(out.user.name || "").trim(),
+        phone: String(out.user.phone || "").trim(),
+        email: String(out.user.email || "").trim(),
+      };
+      if (!out.user._id) {
+        delete out.user;
+      }
+    }
+
+    out.guestInfo = {
+      name: String(out.guestInfo?.name || "").trim(),
+      phone: String(out.guestInfo?.phone || "").trim(),
+      email: String(out.guestInfo?.email || "").trim(),
+      address: String(out.guestInfo?.address || "").trim(),
+    };
+
+    out.isGuest = out.isGuest === true;
+    out.subtotal = Math.max(0, Number(out.subtotal || 0));
+    out.total = Math.max(0, Number(out.total || 0));
+
+    const discount = out.discount && typeof out.discount === "object" ? out.discount : {};
+    out.discount = {
+      applied: discount.applied === true,
+      ruleId: discount.ruleId ? String(discount.ruleId) : null,
+      type: discount.type || null,
+      value: Number.isFinite(Number(discount.value))
+        ? Math.max(0, Number(discount.value))
+        : 0,
+      amount: Number.isFinite(Number(discount.amount))
+        ? Math.max(0, Number(discount.amount))
+        : 0,
+      threshold: Number.isFinite(Number(discount.threshold))
+        ? Math.max(0, Number(discount.threshold))
+        : 0,
+      name: String(discount.name || "").trim(),
+    };
+
+    out.paymentMethod = String(out.paymentMethod || "cod").trim().toLowerCase();
+    out.paymentCurrency =
+      String(out.paymentCurrency || process.env.PAY_CURRENCY || "ILS")
+        .trim()
+        .toUpperCase();
+    out.paymentStatus = String(out.paymentStatus || "unpaid").trim().toLowerCase();
+    out.reference = out.reference ? String(out.reference).trim() : null;
+    out.paymentVerifiedAmount =
+      out.paymentVerifiedAmount == null
+        ? null
+        : Math.max(0, Number(out.paymentVerifiedAmount || 0));
+    out.paymentVerifiedCurrency = String(out.paymentVerifiedCurrency || "")
+      .trim()
+      .toUpperCase();
+    out.paymentTransactionId = String(out.paymentTransactionId || "").trim();
+    out.paymentCardType = String(out.paymentCardType || "").trim();
+    out.paymentCardLast4 = String(out.paymentCardLast4 || "").trim();
+    out.paymentStatusNote = String(out.paymentStatusNote || "").trim();
+    out.bankTransferStatus = String(out.bankTransferStatus || "").trim();
+
+    if (out.deliveredAt) out.deliveredAt = new Date(out.deliveredAt);
+
+    return out;
+  },
 });
 
-const OrderSchema = new mongoose.Schema(
-  {
-    user: {
-      _id: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-        required: false,
-      },
-      name: String,
-      phone: String,
-      email: String,
-    },
-    guestInfo: {
-      name: { type: String, default: "" },
-      phone: { type: String, default: "" },
-      email: { type: String, default: "" },
-      address: { type: String, default: "" },
-    },
-    isGuest: { type: Boolean, default: false, index: true },
-
-    items: { type: [OrderItemSchema], required: true },
-    subtotal: { type: Number, min: 0, required: true },
-    discount: {
-      applied: { type: Boolean, default: false },
-      ruleId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "DiscountRule",
-        default: null,
-      },
-      type: { type: String, enum: ["percent", "fixed", null], default: null },
-      value: { type: Number, min: 0, default: 0 },
-      amount: { type: Number, min: 0, default: 0 },
-      threshold: { type: Number, min: 0, default: 0 },
-      name: { type: String, default: "" },
-    },
-    total: { type: Number, min: 0, required: true },
-    address: { type: String, required: true },
-    status: {
-      type: String,
-      enum: [
-        "pending",
-        "waiting_confirmation",
-        "on_the_way",
-        "delivered",
-        "cancelled",
-      ],
-      default: "waiting_confirmation",
-      index: true,
-    },
-    deliveredAt: { type: Date },
-    paymentMethod: {
-      type: String,
-      enum: ["card", "cod", "bank_transfer"],
-      default: "cod",
-      index: true,
-    },
-    paymentCurrency: {
-      type: String,
-      default: () => process.env.PAY_CURRENCY || "ILS",
-    },
-    paymentStatus: {
-      type: String,
-      enum: ["unpaid", "paid", "failed"],
-      default: "unpaid",
-      index: true,
-    },
-    reference: { type: String, index: true, default: null },
-    paymentVerifiedAmount: { type: Number, min: 0, default: null },
-    paymentVerifiedCurrency: { type: String, default: "" },
-    paymentTransactionId: { type: String, default: "" },
-    paymentCardType: { type: String, default: "" },
-    paymentCardLast4: { type: String, default: "" },
-    paymentStatusNote: { type: String, default: "" },
-    bankTransferStatus: {
-      type: String,
-      enum: [
-        "pending_contact",
-        "instructions_sent",
-        "transfer_received",
-        "verified",
-        "",
-      ],
-      default: "",
-    },
-    notes: { type: String, default: "" },
-  },
-  { timestamps: true }
-);
-
-module.exports = mongoose.models.Order || mongoose.model("Order", OrderSchema);
+module.exports = Order;

@@ -1,113 +1,69 @@
-const mongoose = require("mongoose");
-const { Schema } = mongoose;
-
+const {
+  createFirestoreModel,
+} = require("../utils/firestoreModel");
 const {
   ensureLocalizedObject,
   hasArabicTranslation,
   hasAnyTranslation,
 } = require("../utils/localized");
 
-const LocalizedStringSchema = new Schema(
-  {
-    ar: { type: String, trim: true, default: "" },
-    he: { type: String, trim: true, default: "" },
-  },
-  { _id: false }
-);
-
-const ProductSchema = new Schema(
-  {
-    name: { type: LocalizedStringSchema, required: true },
-    description: { type: LocalizedStringSchema },
-    category: { type: String, trim: true },
-    mainCategory: { type: String, required: true, trim: true },
-    subCategory: { type: String, required: true, trim: true },
-    images: { type: [String], default: [] },
-
-    // فلتر الملكية
-    ownershipType: {
-      type: String,
-      enum: ["ours", "local"],
-      default: "ours",
-    },
-
-    // ✅ أولوية الظهور
-    priority: {
-      type: String,
-      enum: ["A", "B", "C"],
-      default: "C",
-      index: true,
-    },
-    // false = المنتج مخفي عن صفحات الزوار
-    isVisible: {
-      type: Boolean,
-      default: true,
-      index: true,
-    },
-  },
-  { timestamps: true }
-);
-
-ProductSchema.path("name").set((value) => ensureLocalizedObject(value));
-ProductSchema.path("description").set((value) => {
-  if (value == null) return undefined;
+function normalizeLocalized(value, { requireArabic = false } = {}) {
   const normalized = ensureLocalizedObject(value);
-  if (!normalized.ar && !normalized.he) return undefined;
+  if (requireArabic && !hasArabicTranslation(normalized)) {
+    throw new Error("الاسم العربي مطلوب");
+  }
   return normalized;
-});
+}
 
-ProductSchema.path("name").validate(
-  (value) => hasArabicTranslation(value),
-  "الاسم العربي مطلوب"
-);
+const Product = createFirestoreModel({
+  modelName: "Product",
+  collectionName: "products",
+  defaults: () => ({
+    name: { ar: "", he: "" },
+    description: undefined,
+    category: "",
+    mainCategory: "",
+    subCategory: "",
+    images: [],
+    ownershipType: "ours",
+    priority: "C",
+    isVisible: true,
+  }),
+  beforeSave: (doc) => {
+    const out = { ...doc };
+    out.name = normalizeLocalized(out.name, { requireArabic: true });
 
-ProductSchema.path("description").validate(
-  (value) => value == null || hasAnyTranslation(value),
-  "الوصف يجب أن يحتوي على نص واحد على الأقل"
-);
+    const normalizedDescription = out.description
+      ? ensureLocalizedObject(out.description)
+      : null;
+    if (normalizedDescription && hasAnyTranslation(normalizedDescription)) {
+      out.description = normalizedDescription;
+    } else {
+      delete out.description;
+    }
 
-const transformLocalizedFields = (_, ret) => {
-  if (ret.name) {
-    ret.name = ensureLocalizedObject(ret.name);
-  }
-  ret.description = ret.description
-    ? ensureLocalizedObject(ret.description)
-    : { ar: "", he: "" };
-  return ret;
-};
+    out.category = String(out.category || "").trim();
+    out.mainCategory = String(out.mainCategory || "").trim();
+    out.subCategory = String(out.subCategory || "").trim();
+    out.images = Array.isArray(out.images)
+      ? out.images.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
 
-ProductSchema.set("toJSON", {
-  virtuals: true,
-  transform: transformLocalizedFields,
-});
+    const ownershipType = String(out.ownershipType || "ours").trim();
+    out.ownershipType = ["ours", "local"].includes(ownershipType)
+      ? ownershipType
+      : "ours";
 
-ProductSchema.set("toObject", {
-  virtuals: true,
-  transform: transformLocalizedFields,
-});
+    const priority = String(out.priority || "C").trim().toUpperCase();
+    out.priority = ["A", "B", "C"].includes(priority) ? priority : "C";
+    out.isVisible = out.isVisible !== false;
 
-// فهرس نصي للبحث العام
-ProductSchema.index(
-  {
-    "name.ar": "text",
-    "name.he": "text",
-    "description.ar": "text",
-    "description.he": "text",
+    if (!out.mainCategory || !out.subCategory) {
+      throw new Error("mainCategory and subCategory are required");
+    }
+
+    return out;
   },
-  {
-    default_language: "none",
-    weights: {
-      "name.ar": 10,
-      "name.he": 10,
-      "description.ar": 5,
-      "description.he": 5,
-    },
-  }
-);
+});
 
-// فهرس مفيد للفرز الافتراضي
-ProductSchema.index({ priority: 1, createdAt: -1 });
-ProductSchema.index({ isVisible: 1, priority: 1, createdAt: -1 });
-
-module.exports =
-  mongoose.models.Product || mongoose.model("Product", ProductSchema);
+module.exports = Product;

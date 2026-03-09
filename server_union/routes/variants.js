@@ -105,19 +105,9 @@ router.get("/", verifyTokenOptional, async (req, res) => {
     const andFilters = [];
 
     if (product) {
-      const pidStr = String(product);
-      if (mongoose.isValidObjectId(pidStr)) {
-        const oid = new mongoose.Types.ObjectId(pidStr);
-        // ندعم البيانات القديمة التي قد تحفظ product كسلسلة نصية
-        andFilters.push({
-          $or: [
-            { product: oid },
-            { product: pidStr },
-            { product: oid.toString() },
-          ],
-        });
-      } else {
-        andFilters.push({ $or: [{ product: pidStr }] });
+      const pidStr = String(product).trim();
+      if (pidStr) {
+        andFilters.push({ productId: pidStr });
       }
     }
 

@@ -1,39 +1,40 @@
-const mongoose = require("mongoose");
+const {
+  createFirestoreModel,
+} = require("../utils/firestoreModel");
 
-const notificationSchema = new mongoose.Schema(
-  {
-    title: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-    message: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-    target: {
-      type: String,
-      enum: ["all", "user"],
-      default: "all",
-    },
-    user: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: function () {
-        return this.target === "user";
-      },
-    },
-    readBy: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-      },
-    ],
+const Notification = createFirestoreModel({
+  modelName: "Notification",
+  collectionName: "notifications",
+  refs: {
+    user: "User",
   },
-  {
-    timestamps: true,
-  }
-);
+  defaults: () => ({
+    title: "",
+    message: "",
+    target: "all",
+    user: undefined,
+    readBy: [],
+  }),
+  beforeSave: (doc) => {
+    const out = { ...doc };
+    out.title = String(out.title || "").trim();
+    out.message = String(out.message || "").trim();
+    out.target = out.target === "user" ? "user" : "all";
+    if (out.target === "user") {
+      out.user = String(out.user || "").trim();
+      if (!out.user) {
+        throw new Error("user is required for target=user");
+      }
+    } else {
+      delete out.user;
+    }
+    out.readBy = Array.isArray(out.readBy)
+      ? out.readBy.map((value) => String(value || "").trim()).filter(Boolean)
+      : [];
+    if (!out.title) throw new Error("title is required");
+    if (!out.message) throw new Error("message is required");
+    return out;
+  },
+});
 
-module.exports = mongoose.model("Notification", notificationSchema);
+module.exports = Notification;

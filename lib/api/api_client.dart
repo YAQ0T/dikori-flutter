@@ -17,10 +17,28 @@ class ApiException implements Exception {
 
 class ApiSession {
   final String token;
+  final String? refreshToken;
+  final int? expiresIn;
+  final String? authProvider;
+  final String? legacyToken;
   final UserProfile user;
 
-  ApiSession({required this.token, required this.user});
+  ApiSession({
+    required this.token,
+    required this.user,
+    this.refreshToken,
+    this.expiresIn,
+    this.authProvider,
+    this.legacyToken,
+  });
 }
+
+typedef SessionUpdateHandler =
+    Future<void> Function({
+      required String token,
+      String? refreshToken,
+      int? expiresIn,
+    });
 
 class UserProfile {
   final String id;
@@ -80,12 +98,125 @@ class ApiClient {
   final http.Client _client;
   final String _baseUrl;
   String? _token;
+  String? _refreshToken;
+  SessionUpdateHandler? _sessionUpdateHandler;
   final String favoritesPath;
   final String cartPath;
   final String addToCartPath;
 
   void setToken(String? token) {
+    final normalized = token?.trim();
+    _token = (normalized != null && normalized.isNotEmpty) ? normalized : null;
+  }
+
+  void setRefreshToken(String? refreshToken) {
+    final normalized = refreshToken?.trim();
+    _refreshToken =
+        (normalized != null && normalized.isNotEmpty) ? normalized : null;
+  }
+
+  void setSessionUpdateHandler(SessionUpdateHandler? handler) {
+    _sessionUpdateHandler = handler;
+  }
+
+  Future<void> _notifySessionUpdated({
+    required String token,
+    String? refreshToken,
+    int? expiresIn,
+  }) async {
+    final handler = _sessionUpdateHandler;
+    if (handler == null) return;
+    await handler(
+      token: token,
+      refreshToken: refreshToken,
+      expiresIn: expiresIn,
+    );
+  }
+
+  ApiSession _readAuthSession(Map<String, dynamic> data, String errorMessage) {
+    final token = data['token']?.toString();
+    final userJson = data['user'] as Map<String, dynamic>?;
+    if (token == null || token.isEmpty || userJson == null) {
+      throw ApiException(errorMessage);
+    }
+
+    final refreshToken = data['refreshToken']?.toString();
+    final expiresIn = _coerceNullableInt(data['expiresIn']);
+    final authProvider = data['authProvider']?.toString();
+    final legacyToken = data['legacyToken']?.toString();
+    final profile = UserProfile.fromJson(userJson);
+
     _token = token;
+    _refreshToken =
+        (refreshToken != null && refreshToken.isNotEmpty)
+            ? refreshToken
+            : null;
+
+    return ApiSession(
+      token: token,
+      user: profile,
+      refreshToken: _refreshToken,
+      expiresIn: expiresIn,
+      authProvider: authProvider,
+      legacyToken: legacyToken,
+    );
+  }
+
+  Future<bool> _refreshAccessToken() async {
+    final refreshToken = _refreshToken;
+    if (refreshToken == null || refreshToken.isEmpty) return false;
+
+    try {
+      final response = await _client.post(
+        _uri('/auth/session/refresh'),
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode({'refreshToken': refreshToken}),
+      );
+      final data = _decode(response);
+      final token = data['token']?.toString();
+      if (token == null || token.isEmpty) return false;
+
+      final nextRefresh = data['refreshToken']?.toString();
+      final expiresIn = _coerceNullableInt(data['expiresIn']);
+
+      _token = token;
+      if (nextRefresh != null && nextRefresh.isNotEmpty) {
+        _refreshToken = nextRefresh;
+      }
+
+      await _notifySessionUpdated(
+        token: _token!,
+        refreshToken: _refreshToken,
+        expiresIn: expiresIn,
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<http.Response> _requestWithAuthRetry(
+    Future<http.Response> Function(Map<String, String> headers) sender, {
+    bool allowRefresh = true,
+  }) async {
+    final first = await sender(_headers());
+    if (!allowRefresh || first.statusCode != 401) return first;
+    if (_token == null || _token!.isEmpty) return first;
+
+    final refreshed = await _refreshAccessToken();
+    if (!refreshed) return first;
+
+    return sender(_headers());
+  }
+
+  int? _coerceNullableInt(dynamic value) {
+    final parsed = switch (value) {
+      int v => v,
+      num v => v.toInt(),
+      String v => int.tryParse(v),
+      _ => null,
+    };
+    return parsed;
   }
 
   static String _normalizeBase(String? base) {
@@ -124,14 +255,13 @@ class ApiClient {
     );
 
     final data = _decode(response);
-    final token = data['token']?.toString();
-    final userJson = data['user'] as Map<String, dynamic>?;
-    if (token == null || userJson == null) {
-      throw ApiException('استجابة تسجيل الدخول غير متوقعة');
-    }
-    final profile = UserProfile.fromJson(userJson);
-    _token = token;
-    return ApiSession(token: token, user: profile);
+    final session = _readAuthSession(data, 'استجابة تسجيل الدخول غير متوقعة');
+    await _notifySessionUpdated(
+      token: session.token,
+      refreshToken: session.refreshToken,
+      expiresIn: session.expiresIn,
+    );
+    return session;
   }
 
   Future<Map<String, dynamic>> signup({
@@ -178,14 +308,13 @@ class ApiClient {
       body: jsonEncode({'userId': userId, 'code': code}),
     );
     final data = _decode(response);
-    final token = data['token']?.toString();
-    final userJson = data['user'] as Map<String, dynamic>?;
-    if (token == null || userJson == null) {
-      throw ApiException('استجابة توثيق غير متوقعة');
-    }
-    final profile = UserProfile.fromJson(userJson);
-    _token = token;
-    return ApiSession(token: token, user: profile);
+    final session = _readAuthSession(data, 'استجابة توثيق غير متوقعة');
+    await _notifySessionUpdated(
+      token: session.token,
+      refreshToken: session.refreshToken,
+      expiresIn: session.expiresIn,
+    );
+    return session;
   }
 
   Future<void> requestPasswordReset({String? email, String? phone}) async {
@@ -218,7 +347,9 @@ class ApiClient {
   }
 
   Future<UserProfile> me() async {
-    final response = await _client.get(_uri('/auth/me'), headers: _headers());
+    final response = await _requestWithAuthRetry(
+      (headers) => _client.get(_uri('/auth/me'), headers: headers),
+    );
     final data = _decode(response);
     return UserProfile.fromJson(data);
   }
@@ -319,9 +450,8 @@ class ApiClient {
 
   Future<List<ProductItem>> fetchFavorites() async {
     try {
-      final response = await _client.get(
-        _uri(favoritesPath),
-        headers: _headers(),
+      final response = await _requestWithAuthRetry(
+        (headers) => _client.get(_uri(favoritesPath), headers: headers),
       );
       final data = _decode(response);
       final list = data['favorites'] ?? data['data'];
@@ -338,7 +468,9 @@ class ApiClient {
 
   Future<List<CartItem>> fetchCart() async {
     try {
-      final response = await _client.get(_uri(cartPath), headers: _headers());
+      final response = await _requestWithAuthRetry(
+        (headers) => _client.get(_uri(cartPath), headers: headers),
+      );
       final data = _decode(response);
       final list = data['items'] ?? data['data'];
       if (list is! List) return [];
@@ -351,10 +483,12 @@ class ApiClient {
 
   Future<CartItem?> addToCart(String productId) async {
     try {
-      final response = await _client.post(
-        _uri(addToCartPath),
-        headers: _headers(),
-        body: jsonEncode({'productId': productId, 'quantity': 1}),
+      final response = await _requestWithAuthRetry(
+        (headers) => _client.post(
+          _uri(addToCartPath),
+          headers: headers,
+          body: jsonEncode({'productId': productId, 'quantity': 1}),
+        ),
       );
       if (response.statusCode >= 400) return null;
       final data = _decode(response);
@@ -368,17 +502,18 @@ class ApiClient {
   }
 
   Future<void> toggleFavorite(String productId) async {
-    final response = await _client.post(
-      _uri('$favoritesPath/toggle/$productId'),
-      headers: _headers(),
+    final response = await _requestWithAuthRetry(
+      (headers) => _client.post(
+        _uri('$favoritesPath/toggle/$productId'),
+        headers: headers,
+      ),
     );
     _decode(response);
   }
 
   Future<List<OrderSummary>> fetchOrders() async {
-    final response = await _client.get(
-      _uri('/orders/mine'),
-      headers: _headers(),
+    final response = await _requestWithAuthRetry(
+      (headers) => _client.get(_uri('/orders/mine'), headers: headers),
     );
     final data = _decode(response);
     final list = data['orders'] ?? data['data'] ?? data;
@@ -432,10 +567,12 @@ class ApiClient {
           .toList(),
     };
 
-    final response = await _client.post(
-      _uri('/orders'),
-      headers: _headers(),
-      body: jsonEncode(payload),
+    final response = await _requestWithAuthRetry(
+      (headers) => _client.post(
+        _uri('/orders'),
+        headers: headers,
+        body: jsonEncode(payload),
+      ),
     );
 
     final data = _decode(response);
@@ -534,9 +671,8 @@ class ApiClient {
   }
 
   Future<List<AppNotification>> fetchNotifications() async {
-    final response = await _client.get(
-      _uri('/notifications/my'),
-      headers: _headers(),
+    final response = await _requestWithAuthRetry(
+      (headers) => _client.get(_uri('/notifications/my'), headers: headers),
     );
     final data = _decode(response);
     final list = data['notifications'] ?? data['data'] ?? data;
@@ -549,9 +685,9 @@ class ApiClient {
 
   Future<AppNotification?> markNotificationRead(String id) async {
     try {
-      final response = await _client.patch(
-        _uri('/notifications/$id/read'),
-        headers: _headers(),
+      final response = await _requestWithAuthRetry(
+        (headers) =>
+            _client.patch(_uri('/notifications/$id/read'), headers: headers),
       );
       final data = _decode(response);
       if (data.isEmpty) return null;
